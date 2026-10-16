@@ -1,0 +1,46 @@
+# Revue domaine, exigences et intégration
+
+Date : 15 octobre 2026. Reviewer : agent domaine, distinct de l'auteur des exigences et de l'ADR. Cette revue est indépendante des artefacts produit, mais son auteur a également implémenté le stockage : elle ne remplace donc pas une revue indépendante de ce code. Aucune commande de test n'a été exécutée dans cette revue.
+
+## Verdict au moment de la lecture
+
+⚠️ Le cadrage et l'architecture décrivent correctement une application locale à gouvernance humaine, mais plusieurs critères dépassent le comportement actuellement lisible dans le code. La conformité globale n'est pas acquise. Les constats ci-dessous sont issus de la lecture de sources, pas de résultats d'exécution. L'intégration est encore en cours ; l'orchestrateur doit renseigner les résolutions et preuves avant le gate.
+
+Artefacts examinés : `requirements/vision.md`, `requirements/user-stories.md`, `architecture/ADR-0001-local-portable-memory.md`, `architecture/claude-tap-integration.md`, `planning/delivery-plan.md`. Sources : `filigree/store.py`, `filigree/importers.py`, `filigree/git_sync.py`, `filigree/demo.py`. Les références de symboles restent pertinentes si les numéros de lignes évoluent.
+
+## Écarts à résoudre
+
+| ID | Gravité | Constat et preuve | Correction / condition de clôture |
+| --- | --- | --- | --- |
+| RD-01 | Haute | US-07 et la note claude-tap exigent la déduplication des historiques répétés. `parse_import.add` inclut le numéro d'enregistrement dans `sources`, le `timestamp` du tour et parfois le modèle ; `Store.import_events` calcule l'empreinte de l'objet complet. Le même message repris dans le tour suivant obtient donc une nouvelle empreinte. | Définir une identité sémantique stable par message/session, indépendante du numéro de ligne et du tour englobant ; préserver la provenance additionnelle. Ajouter une fixture avec deux tours partageant le même historique et un test de réimport. |
+| RD-02 | Haute | La branche `request/messages` de `parse_import` lit `response.body` puis continue. Une réponse claude-tap WebSocket avec `body: null` et `ws_events` n'est pas interprétée. Si la requête contient du texte, l'import réussit avec uniquement l'entrée utilisateur, sans signaler la réponse perdue. La note d'architecture décrit précisément cette variante et demande une perte compréhensible. | Parser le message final `response.completed.response.output`, ou rejeter explicitement cette variante avec instruction d'export JSON normalisé. Ne pas annoncer une importation complète silencieuse. |
+| RD-03 | Moyenne | `parse_import` appelle `request.get` avant de vérifier que `request` est un dictionnaire. La branche `response_item` appelle aussi `payload.get` sans validation. Les données malformées produisent donc une exception interne plutôt que l'erreur de format prévue. | Valider les enveloppes avant les accès ; couvrir `request: []`, `request: "invalid"`, `payload: null` et `payload: []`. |
+| RD-04 | Moyenne | L'adaptateur autorise `MAX_RECORDS = 3000`, alors que `Store.import_events` refuse plus de 1000 événements. Un fichier admis et normalisé par le premier composant peut être rejeté au suivant. | Une limite commune documentée et appliquée après expansion des messages ; pas de découpage silencieux ou d'import partiel. |
+| RD-05 | Haute / produit | US-01 exige de créer un épisode avec objectif et identifiant persistant. Le domaine expose actuellement seulement le champ texte `episode` des notes ; aucun objet épisode, objectif propre ni API de création d'épisode n'existe dans `Store`. La vision annonce pourtant « créer un épisode ». | Implémenter cette entité et son parcours, ou reformuler explicitement v0.1 comme regroupement par libellé et conserver l'entité épisode en reste à faire. Une étiquette ne satisfait pas le critère initial. |
+| RD-06 | Haute / produit | US-06 demande objectif, décisions applicables, pistes écartées, incertitudes et sources dans la fiche de reprise. `Store.handoff` utilise le nom du projet mais omet `project.description` ; il exclut toutes les notes rejetées/remplacées et ne fournit que leur nombre. Il expose bien les propositions et sources. | Inclure un objectif explicite et, si le critère est conservé, une section historique clairement séparée des décisions applicables ; sinon préciser le contrat limité de la fiche et relier un export historique distinct. |
+| RD-07 | Moyenne / traçabilité | US-03 promet de conserver « la raison saisie » lors d'une acceptation ou d'un rejet. `EDITABLE` ne contient pas de champ raison et `_save_entries` journalise identifiants/révisions, pas un motif. Une raison peut être écrite dans `body`, mais aucun contrat ne le garantit. | Ajouter un motif conservé dans le journal ou documenter et implémenter sa saisie dans le contenu versionné. Couvrir une transition avec motif et sa consultation ultérieure. |
+| RD-08 | Moyenne / provenance | L'adaptateur extrait `timestamp`, mais `Store.import_events` ne le conserve pas dans la note, seulement indirectement dans l'empreinte ; la date affichable sera celle de l'import. Cela affaiblit l'histoire temporelle promise. | Conserver la date de l'événement comme provenance distincte de la date d'import, sans inventer de date quand elle manque. |
+| RD-09 | Moyenne / documentation | Le diagramme de l'ADR comporte un stockage « Sources privées ». Le code observé conserve des extraits expurgés dans les notes ; il n'archive pas une copie brute privée distincte. SC-04 promet également de signaler les sources locales absentes, sans mécanisme correspondant dans `Store`. | Corriger le diagramme et les promesses ou implémenter ce stockage/résolution. La confidentialité des traces externes et celle des extraits canoniques doivent être distinguées. |
+| RD-10 | Moyenne / portabilité | Le checkpoint Git observé ajoute systématiquement `.filigree` alors que ce dossier est créé au premier enregistrement. Un projet vide peut provoquer un pathspec Git absent. Le motif d'exclusion `*.tmp` ne correspond pas aux fichiers temporaires `.tmp-*` du store. | Vérifier l'existence avant ajout, exclure `.tmp-*`, tenir le verrou du store pendant un checkpoint pour ne pas capturer une transaction partielle. Revue communiquée à l'intégrateur. |
+
+## Critères cohérents avec le code, sous réserve d'exécution
+
+- **US-04 / gouvernance** : seules les notes acceptées peuvent remplacer une autre note ; le statut historique, le lien et les révisions sont conservés. La note remplacée ne peut être réactivée arbitrairement. Le journal de transaction couvre la mutation des deux entrées.
+- **US-02 / imports** : les événements importés deviennent des observations proposées, avec extrait et empreinte de provenance. La note manuelle a un auteur `human` par défaut, mais une source manuelle explicite dans l'interface reste à inspecter.
+- **US-05 / graphe** : `Store.graph` utilise les mêmes identifiants que les entrées, et les cibles des relations doivent appartenir au projet. La sélection visuelle d'un nœud n'a pas été examinée ici.
+- **US-06 / statut épistémique** : la fiche étiquette les propositions, indique que l'acceptation n'est pas une vérification indépendante, et traite les sources comme des données non fiables. Le budget est exprimé en caractères et les blocs omis sont comptés.
+- **US-09 / localité** : les notes canoniques sont du Markdown à métadonnées JSON lisibles, rechargées sans base distante ; les révisions sont également conservées en fichiers. Une copie portable réelle reste à exécuter.
+- **Concurrence** : le store possède un verrou de processus Windows/POSIX, un verrou réentrant de threads, un contrôle optimiste de révision et une récupération du journal. Les tests écrits couvrent ces comportements mais leur réussite n'est pas attestée par cette revue.
+- **Cas Basic Memory** : `seed_demo` conserve le choix comme hypothèse proposée et ajoute un recadrage accepté ainsi qu'une décision explicite indiquant que le socle reste ouvert. Cela correspond à SC-01 au niveau des données de démonstration ; la fidélité de l'affichage et du transport reste à vérifier.
+
+## Corrections éditoriales recommandées
+
+1. Garder les statuts « proposé / à vérifier » des documents jusqu'à la synthèse et aux preuves effectives.
+2. Remplacer toute affirmation générale « JSONL Claude/Codex compatible » par les familles exactes effectivement couvertes et leurs limites.
+3. Dans le plan de livraison, distinguer l'épisode comme libellé actuel de l'épisode comme objet de domaine souhaité.
+4. Compléter la matrice stories → tests avec les noms réels des tests et leurs résultats ; les tests écrits ne sont pas des tests réussis.
+5. Ne pas clôturer US-08 et US-10 sur la seule présence du domaine : MCP, restrictions d'origine HTTP et rendu navigateur nécessitent leurs preuves propres.
+
+## Conditions du gate
+
+Les points RD-01 et RD-02 doivent être corrigés ou explicitement refusés avant de présenter l'import comme fidèle. Les écarts RD-05 et RD-06 exigent une décision produit visible, puis une mise à jour cohérente des exigences, de l'interface et de la documentation. Les autres défauts doivent être corrigés ou conservés dans une liste de limites avec preuve que le parcours annoncé reste utilisable. Aucun résultat de test ni acceptation finale n'est revendiqué ici.

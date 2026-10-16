@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filigree-memory"
+version = "0.1.0"
+description = "A local living memory of how and why your project evolved."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Filigree contributors"}]
+keywords = ["knowledge", "memory", "mcp", "agents", "documentation"]
+dependencies = []
+
+[project.scripts]
+filigree = "filigree.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["filigree*"]
+
+[tool.setuptools.package-data]
+filigree = ["static/*"]

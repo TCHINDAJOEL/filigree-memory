@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "filigree": {
+      "command": "python",
+      "args": ["-m", "filigree", "--data-dir", "REPLACE_WITH_ABSOLUTE_MEMORY_DIRECTORY", "mcp"]
+    }
+  }
+}

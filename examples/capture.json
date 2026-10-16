@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "auto_create": true,
+  "paused_all": false,
+  "tap": {"enabled": true, "db": null},
+  "sources": {"native_index": true, "native_fallback": false},
+  "roots": {"claude": null, "codex": null},
+  "exclude": [],
+  "paused": []
+}

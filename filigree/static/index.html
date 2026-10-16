@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#302d46">
+  <meta name="description" content="Filigree, la mémoire vivante de vos projets. Gardez le fil des décisions, de leurs sources et de leur évolution.">
+  <title>Filigree — Garder le fil</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%237560cf'/%3E%3Cpath d='M12 30V10h17M12 20h13' stroke='white' stroke-width='4' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Aller au contenu</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Navigation principale">
+      <a class="brand" href="#overview" aria-label="Filigree, accueil"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M8 29V8h21M8 18h16M17 29V18"/></svg><span>filigree<span class="brand-dot">.</span></span></a>
+      <p class="brand-subtitle">La mémoire de vos projets</p>
+      <div class="project-switch"><label for="project-select">Espace de travail</label><select id="project-select" aria-label="Projet actif"><option>Chargement…</option></select><button id="new-project" class="sidebar-add" title="Créer un projet" aria-label="Créer un projet">+</button></div>
+      <nav id="nav">
+        <button data-view="overview" class="nav-item active"><span class="nav-icon">◫</span>Vue d’ensemble</button>
+        <button data-view="entries" class="nav-item"><span class="nav-icon">▤</span>Connaissances<span id="nav-count" class="nav-count">0</span></button>
+        <button data-view="timeline" class="nav-item"><span class="nav-icon">◷</span>Chronologie</button>
+        <button data-view="graph" class="nav-item"><span class="nav-icon">⌘</span>Graphe</button>
+        <button data-view="handoff" class="nav-item"><span class="nav-icon">⇄</span>Reprise</button>
+        <button data-view="import" class="nav-item"><span class="nav-icon">↥</span>Importer</button>
+        <button data-view="capture" class="nav-item"><span class="nav-icon">◉</span>Capture</button>
+      </nav>
+      <div class="sidebar-note"><span class="local-dot"></span><span>Local. Portable. À vous.</span><p>Les idées évoluent.<br>Leur histoire reste.</p></div>
+      <div class="sidebar-bottom"><span>Filigree <small id="version">v0.1.0</small></span><button id="git-open" title="Versionner la mémoire" aria-label="Versionner la mémoire avec Git">Git ↗</button></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><div class="breadcrumb"><span id="project-name">Votre espace</span><span>/</span><strong id="view-name">Vue d’ensemble</strong></div><div class="top-actions"><span class="local-indicator"><i></i> En local</span><button id="capture-pill" class="capture-pill idle" data-go="capture" title="État de la capture automatique">Capture…</button><button id="export" class="button ghost small">Exporter</button><button id="add-entry" class="button primary small"><span>+</span> Ajouter une connaissance</button></div></header>
+      <div id="diagnostics" role="status"></div>
+      <main id="main" tabindex="-1" aria-busy="true"><div class="loading-state"><span class="spinner"></span>Ouverture de votre mémoire…</div></main>
+      <footer class="workspace-footer"><span>Une idée peut changer. Sa source ne disparaît pas.</span><span id="footer-count">Filigree</span></footer>
+    </div>
+  </div>
+  <dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
+  <dialog id="detail" class="detail-dialog" aria-labelledby="detail-title"><div id="detail-content"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

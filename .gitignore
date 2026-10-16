@@ -1,0 +1,22 @@
+.traces/
+.runtime/
+.playwright-mcp/
+.filigree-data/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.env
+.env.*
+!.env.example
+node_modules/
+.coverage
+test-results/
+playwright-report/
+.DS_Store
+# Local agent assignments and machine-specific restart state.
+.aiwg/planning/CONTINUATION.md
+.aiwg/planning/claude-*.md
+scripts/continue-delivery.py
