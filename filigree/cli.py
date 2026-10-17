@@ -115,7 +115,7 @@ def _launcher() -> list[str]:
     python = sys.executable or "python"
     checkout = _source_checkout()
     if checkout:
-        return [python, "-c", f"import sys;sys.path.insert(0,{str(checkout)!r});from filigree.cli import main;main()"]
+        return [python, "-c", f"import sys;sys.path.insert(0,{Path(checkout).as_posix()!r});from filigree.cli import main;main()"]
     return [python, "-m", "filigree"]
 
 
@@ -261,8 +261,11 @@ def main(argv=None):
             from .hooks import signal as record
             raise SystemExit(record(args.data_dir, args.client, args.event, args.session_id, args.inject, args.payload))
         if args.command == "agent":
-            from .agent import run_agent
-            run_agent(args.data_dir, args.port, interval=max(args.interval, 1.0), out=lambda line: print(line, flush=True))
+            from .agent import AgentRunning, run_agent
+            try:
+                run_agent(args.data_dir, args.port, interval=max(args.interval, 1.0), out=lambda line: print(line, flush=True))
+            except AgentRunning as exc:
+                print(f"Filigree: {exc}", file=sys.stderr)  # exit 0: an autostart must not loop on it
             return
         if args.command in {"probe", "status", "service", "hooks"}:
             print(json.dumps(v2_command(args), ensure_ascii=False, indent=2))

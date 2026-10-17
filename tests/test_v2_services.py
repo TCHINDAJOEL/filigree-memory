@@ -146,7 +146,7 @@ class HookTests(Temp):
         self.assertEqual(current["model"], "x")
         commands = [hook["command"] for group in current["hooks"]["SessionStart"] for hook in group["hooks"]]
         self.assertIn("echo mine", commands)
-        self.assertTrue(any("signal --client claude --event session_start --inject" in command for command in commands))
+        self.assertTrue(any("signal --client claude --event session_start --inject" in command.replace('"', "").replace("'", "") for command in commands))
         self.assertTrue(hooks.status(self.data, env=self.env)["claude"]["inject"])
         again = hooks.change("claude", "install", self.data, self.launcher, env=self.env, inject=True)
         self.assertFalse(again["changed"])  # idempotent

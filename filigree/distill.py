@@ -92,9 +92,11 @@ def distill_project(store, project_id: str, sheets: dict, idle_minutes: int = 10
         uri = SHEET_URI + session["session_key"] + (f"#suite-{suite}" if suite else "")
         existing = _entry_by_uri(entries, uri)
         if existing is not None and existing["status"] in {"accepted", "rejected", "superseded"}:
-            suite += 1  # a reviewed sheet is never rewritten: new activity becomes a separate proposal
-            uri = SHEET_URI + session["session_key"] + f"#suite-{suite}"
-            existing = _entry_by_uri(entries, uri)
+            # A reviewed sheet is never rewritten: new activity becomes the next free suite, even if the saved state was lost.
+            while existing is not None and existing["status"] in {"accepted", "rejected", "superseded"}:
+                suite += 1
+                uri = SHEET_URI + session["session_key"] + f"#suite-{suite}"
+                existing = _entry_by_uri(entries, uri)
             events = [event for event in events if (event.get("ts_source") or event["ts_observed"]) > (mark.get("last_ts") or "")] or events
         body = sheet_body(session, events)
         source = {"label": f"journal d'activité · {session['session_key'][-12:]}", "uri": uri, "excerpt": body[:4000]}

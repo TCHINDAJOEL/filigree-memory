@@ -34,13 +34,18 @@ def _command(launcher: list[str], data_dir, client: str, event: str, inject: boo
 
 def _shell_join(parts: list[str]) -> str:
     if os.name == "nt":
-        return " ".join('"' + part.replace('"', '\\"') + '"' if any(ch in part for ch in ' \t"') else part for part in parts)
+        # Claude Code may run hooks through cmd.exe or Git Bash: forward slashes inside double quotes mean the same
+        # thing to both (bash would eat unquoted backslashes). Python and Windows accept forward-slash paths.
+        return " ".join('"' + part.replace("\\", "/") + '"' for part in parts)
     import shlex
     return " ".join(shlex.quote(part) for part in parts)
 
 
 def _is_ours(command) -> bool:
-    return isinstance(command, str) and "filigree" in command and " signal " in command and "--client" in command
+    if not isinstance(command, str):
+        return False
+    plain = command.replace('"', "").replace("'", "")  # quoting differs between cmd.exe, bash and older installs
+    return "filigree" in plain and " signal " in plain and "--client" in plain
 
 
 def claude_settings_path(env=None, home=None) -> Path:

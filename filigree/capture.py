@@ -744,7 +744,7 @@ class Capture:
             if project and project.get("folder") and _is_generic(project["folder"]["path"], self.env):
                 project = None  # a project bound to a shared location (temp, users, system) must not absorb what lies below it
             if project is None:
-                project = self._worktree_project(path)
+                project = self._worktree_project(path, ctx.settings["allowed_roots"])
                 if project is not None:
                     evidence["worktree_of"] = project["folder"]["path"]
             projects.append(project["id"] if project else None)
@@ -782,11 +782,11 @@ class Capture:
         ctx.projects[project["id"]] = project
         return {"status": "ok", "project_id": project["id"], **evidence}
 
-    def _worktree_project(self, path: Path):
+    def _worktree_project(self, path: Path, roots=None):
         """Project registered exactly at the main repository of a proven linked worktree, else None."""
         git = _git_root(path)
         main = resolver.proven_worktree_main(git) if git is not None else None
-        if main is None or _is_generic(main, self.env):
+        if main is None or _is_generic(main, self.env) or (roots is not None and not resolver.under_roots(main, roots)):
             return None
         project = self.store.locate_project(str(main))
         if not project or not project.get("folder"):

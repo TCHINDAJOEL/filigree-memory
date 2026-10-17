@@ -99,7 +99,8 @@ class ObserverCase(unittest.TestCase):
 class ObserverTests(ObserverCase):
     def test_baseline_then_new_lines_only_and_no_duplicates(self):
         pid = self.store.create_project("App", folder=str(self.work))["id"]
-        self.transcript("S1", [("user", "historique ancien")])
+        path = self.transcript("S1", [("user", "historique ancien")])
+        path.write_text(path.read_text(encoding="utf-8").replace(datetime.now(timezone.utc).isoformat(timespec="seconds")[:4], "2020", 1), encoding="utf-8")
         first = self.observer.scan_once()
         self.assertEqual(first["events"], 0)  # D11: no automatic catch-up
         self.transcript("S1", [("user", "nouvelle demande"), ("assistant", "réponse")], append=True)
@@ -113,7 +114,8 @@ class ObserverTests(ObserverCase):
         state["files"] = {key: {"offset": 0} for key in state["files"]}  # replay everything: stable ids dedupe
         (self.store.root / ".capture" / "activity-state.json").write_text(json.dumps(state), encoding="utf-8")
         self.observer.scan_once()
-        self.assertEqual(log.stats()["events"], 4)  # + the baselined historical line, read once on replay, never twice
+        self.assertEqual(log.stats()["events"], 3)  # replay: no duplicate, and the pre-baseline history is still not caught up
+        self.assertNotIn("historique ancien", {event["summary"] for event in log.events()})
 
     def test_no_project_and_outside_roots_never_create_or_journal(self):
         self.observer.scan_once()

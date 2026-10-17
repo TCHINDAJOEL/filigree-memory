@@ -113,19 +113,36 @@ def agent_key(root) -> str:
     Owner-only permissions are applied where the OS supports them; any process of the same OS user can still read it."""
     path = Path(root) / ".runtime" / "agent.key"
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        pass
-    else:
+    if not path.exists():
+        # Written in full under a private name, then linked into place: a concurrent reader never sees a partial key,
+        # and os.link refuses to replace a key another process published first.
+        temporary = path.with_name(f"agent.key.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="ascii") as handle:
             handle.write(secrets.token_urlsafe(32))
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+        except OSError:  # no hard links on this filesystem: exclusive rename is not portable, so create exclusively
+            try:
+                with open(path, "x", encoding="ascii") as handle:
+                    handle.write(temporary.read_text(encoding="ascii"))
+            except FileExistsError:
+                pass
+        finally:
+            temporary.unlink(missing_ok=True)
     if os.name != "nt":
         try:
             os.chmod(path, 0o600)
         except OSError:
             pass
-    key = path.read_text(encoding="ascii", errors="replace").strip()
+    key = ""
+    for _ in range(20):  # a key being written by the fallback path is complete within milliseconds
+        key = path.read_text(encoding="ascii", errors="replace").strip()
+        if KEY_PATTERN.fullmatch(key):
+            break
+        time.sleep(0.05)
     if not KEY_PATTERN.fullmatch(key):
         raise ValueError(f"Clé locale illisible ou corrompue : supprimez {path} puis relancez Filigree (une nouvelle clé sera créée).")
     return key

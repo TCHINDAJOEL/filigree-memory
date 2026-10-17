@@ -256,7 +256,7 @@ class Observer:
                     if (candidate / ".git").exists():
                         main = resolver.proven_worktree_main(candidate)
                         break
-                if main is not None:
+                if main is not None and (roots is None or resolver.under_roots(main, roots)):
                     located = self.store.locate_project(str(main))
                     if located and located.get("folder") and os.path.normcase(os.path.realpath(located["folder"]["path"])) == os.path.normcase(os.path.realpath(main)):
                         project = located
@@ -272,7 +272,7 @@ class Observer:
 
     def _scan(self) -> dict:
         settings = self._settings()
-        result = {"enabled": False, "files": 0, "events": 0, "sessions": 0, "skipped": {}, "distilled": 0, "purged": 0, "unsupported": []}
+        result = {"enabled": False, "files": 0, "events": 0, "sessions": 0, "skipped": {}, "distilled": 0, "purged": 0, "unsupported": [], "errors": 0}
         activity = settings.get("activity", {})
         if not settings.get("enabled") or settings.get("paused_all") or not activity.get("enabled", True):
             return result
@@ -318,39 +318,52 @@ class Observer:
                     result["skipped"]["no_project"] = result["skipped"].get("no_project", 0) + 1
                     continue
                 folder = Path(project["folder"]["path"])
-                if project["id"] in paused or any(folder == item or item in folder.parents for item in excluded):
-                    cursor["offset"] = size  # deliberate pause or exclusion: skipped, not replayed later
+                session_folder = Path(info.cwd)
+                blocked = [*excluded, self.store.root]
+                if project["id"] in paused or any(place == item or item in place.parents for place in (folder, session_folder) for item in blocked):
+                    cursor["offset"] = size  # deliberate pause or exclusion (project or session folder): skipped, not replayed later
                     result["skipped"]["paused"] = result["skipped"].get("paused", 0) + 1
                     continue
-                added, offset = self._ingest(source, info, path, cursor["offset"], project, folder, now)
+                try:
+                    added, offset = self._ingest(source, info, path, cursor["offset"], project, folder, now, state["baseline_at"])
+                except Exception as exc:  # noqa: BLE001 — one unreadable file or busy journal must not stall the others
+                    result["errors"] += 1
+                    result["skipped"]["error_" + type(exc).__name__] = result["skipped"].get("error_" + type(exc).__name__, 0) + 1
+                    continue
                 cursor["offset"] = offset  # only after the journal write succeeded
                 result["files"] += 1
                 result["events"] += added
                 touched_projects[project["id"]] = project
+        _write_json(self.state_path, state)  # progress is kept even if a later step fails
         signals, state["signal_offset"] = read_signals(self.store.root, int(state.get("signal_offset", 0)))
         ended = {item["session_id"] for item in signals if item.get("event") in {"session_end", "stop"}}
         projects = {project["id"]: project for project in self.store.list_projects() if project.get("folder") and not project.get("demo")}
-        if ended:
-            for project_id in projects:
-                log = ActivityLog(journal_path(self.store, project_id))
-                for session in log.sessions():
-                    if session["session_key"].rsplit(":", 1)[-1] in ended:
-                        log.mark_ended(session["session_key"])
         from .distill import distill_project
         sheets = state.setdefault("sheets", {})
+        purge_today = state.get("purged_on") != now.date().isoformat()
+        retention = int(activity.get("retention_days", 90))
         for project_id in projects:
-            if journal_path(self.store, project_id).exists():
+            if not journal_path(self.store, project_id).exists():
+                continue
+            try:  # each project is isolated: a busy or newer journal, or a conflicting sheet, never blocks the others
+                log = ActivityLog(journal_path(self.store, project_id))
+                if ended:
+                    for session in log.sessions():
+                        if session["session_key"].rsplit(":", 1)[-1] in ended:
+                            log.mark_ended(session["session_key"])
                 result["distilled"] += distill_project(self.store, project_id, sheets, idle_minutes=IDLE_MINUTES)
-        if state.get("purged_on") != now.date().isoformat():
-            retention = int(activity.get("retention_days", 90))
-            for project_id in projects:
-                result["purged"] += ActivityLog(journal_path(self.store, project_id)).purge(retention)
+                if purge_today:
+                    result["purged"] += log.purge(retention)
+            except Exception as exc:  # noqa: BLE001
+                result["errors"] += 1
+                result["skipped"]["error_" + type(exc).__name__] = result["skipped"].get("error_" + type(exc).__name__, 0) + 1
+        if purge_today:
             state["purged_on"] = now.date().isoformat()
         result["sessions"] = len({key for key in sheets})
         _write_json(self.state_path, state)
         return result
 
-    def _ingest(self, source: str, info, path: str, offset: int, project: dict, folder: Path, now: datetime) -> tuple[int, int]:
+    def _ingest(self, source: str, info, path: str, offset: int, project: dict, folder: Path, now: datetime, baseline_at: str = "") -> tuple[int, int]:
         with open(path, "rb") as handle:
             handle.seek(offset)
             data = handle.read(CHUNK_BYTES)
@@ -360,15 +373,21 @@ class Observer:
         extractor = self.extractors.setdefault(path, Extractor())
         events = []
         observed = _iso(now)
+        floor = _parse(baseline_at)
         for raw in data[:end].splitlines():
             if not raw.strip():
                 continue
             found, element, stamp = extract_line(extractor, source, raw)
-            for part, event in enumerate(found):
+            moment = _parse(stamp) if stamp else None
+            if floor is not None and moment is not None and moment < floor:
+                continue  # D11: history older than the observer's first run (resumed or forked transcripts) is not caught up
+            for number, event in enumerate(found):
                 if event["kind"] not in KINDS or not event["summary"] and event["kind"] not in {"commit"}:
                     continue
                 outside = any(Path(name).is_absolute() and not resolver.under_roots(name, [folder]) for name in event["files"])
-                events.append({**event, "event_id": f"{info.key}:{element}:{part}", "ts_source": stamp, "ts_observed": observed, "outside_project": outside,
+                part = event.pop("part", number)
+                # The id names the source element, not the session: a line copied into a fork or resume is one event.
+                events.append({**event, "event_id": f"{info.client}:{element}:{part}", "ts_source": stamp, "ts_observed": observed, "outside_project": outside,
                                "provenance": {"collector": info.collector, "native_id": info.native_id, "file": Path(path).name, "claim": "transcription locale, non authentifiée"}})
         session = {"session_key": info.key, "client": info.client, "entrypoint": info.entrypoint, "model": info.model, "cwd": info.cwd,
                    "parent_key": f"{info.key.rsplit(':', 1)[0]}:{info.parent_native_id}" if info.parent_native_id else None}

@@ -6,6 +6,7 @@ proposal, `filigree status` and that `filigree serve` defers to the running agen
 
     python scripts/verify_agent_e2e.py
 """
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -42,9 +43,10 @@ def main() -> int:
             transcripts = base / "claude" / "projects" / "-app"
             transcripts.mkdir(parents=True)
             time.sleep(2.5)  # the first observer cycle sets the baseline (no catch-up)
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")  # after the baseline: older lines are history (D11)
             rows = [
-                {"type": "user", "sessionId": "E2E", "cwd": str(project_folder), "uuid": "e1", "timestamp": "2026-10-17T12:00:00Z", "message": {"role": "user", "content": "Ajoute la pagination"}},
-                {"type": "assistant", "sessionId": "E2E", "cwd": str(project_folder), "uuid": "e2", "timestamp": "2026-10-17T12:00:05Z",
+                {"type": "user", "sessionId": "E2E", "cwd": str(project_folder), "uuid": "e1", "timestamp": now, "message": {"role": "user", "content": "Ajoute la pagination"}},
+                {"type": "assistant", "sessionId": "E2E", "cwd": str(project_folder), "uuid": "e2", "timestamp": now,
                  "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "Edit", "input": {"file_path": str(project_folder / "api.py")}}]}},
             ]
             (transcripts / "E2E.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")

@@ -42,12 +42,12 @@ def plan(system: str, python: str, data_dir, home, env=None, checkout=None) -> d
         items = "\n".join(f"    <string>{escape(argument)}</string>" for argument in arguments)
         text = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
                 f"<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{LABEL}</string>\n  <key>ProgramArguments</key>\n  <array>\n{items}\n  </array>\n"
-                "  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n")
+                "  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n</dict>\n</plist>\n")
         return {"system": system, "kind": "file", "path": str(path), "text": text, "after": [["launchctl", "load", "-w", str(path)]], "before_remove": [["launchctl", "unload", "-w", str(path)]], "description": str(path)}
     if system == "Linux":
         config = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
         path = config / "systemd" / "user" / "filigree-agent.service"
-        quoted = " ".join('"' + argument.replace("\\", "\\\\").replace('"', '\\"') + '"' for argument in arguments)
+        quoted = " ".join('"' + argument.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"' for argument in arguments)
         text = f"[Unit]\nDescription=Filigree local project memory agent\n\n[Service]\nExecStart={quoted}\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
         return {"system": system, "kind": "file", "path": str(path), "text": text,
                 "after": [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", "filigree-agent.service"]],

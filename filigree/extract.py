@@ -11,7 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import PurePath
+import shlex
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 from . import tap_source
 from .store import redact_whole
@@ -37,10 +38,16 @@ def summarize(text) -> str:
 
 def _program(command: str) -> str:
     """Program name only: arguments may hold secrets, paths or data and are never kept."""
-    for token in re.split(r"\s+", command.strip()):
-        if not token or "=" in token.split("/")[-1] and not token.startswith(("./", "/")):
+    try:
+        tokens = shlex.split(command, posix=False)  # keeps backslashes: Windows paths stay intact
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        token = token.strip("\"'")
+        if not token or ("=" in token.split("/")[-1].split("\\")[-1] and not token.startswith(("./", "/", "\\"))):
             continue  # skip leading VAR=value assignments
-        return PurePath(token.strip("\"'")).name[:60] or "commande"
+        path = PureWindowsPath(token) if "\\" in token else PurePosixPath(token)
+        return path.name[:60] or "commande"
     return "commande"
 
 
@@ -125,7 +132,8 @@ class Extractor:
         kind, label = self.calls.pop(call_id, ("tool_call", "")) if isinstance(call_id, str) else ("tool_call", "")
         if kind == "test":
             failed = is_error or bool(re.search(r"\b(?:FAILED|failures?=\d*[1-9]|[1-9]\d* failed|ERROR|Traceback)\b", text or ""))
-            return {"kind": "test_result", "summary": summarize(f"{'échec' if failed else 'réussi'} · {label} · {(text or '').strip()[-200:]}"), "files": []}
+            clean, _ = redact_whole(tap_source.repair_text(text or ""))  # redact the whole output first, then keep its tail
+            return {"kind": "test_result", "summary": summarize(f"{'échec' if failed else 'réussi'} · {label} · {clean.strip()[-200:]}"), "files": []}
         if is_error:
             return {"kind": "error", "summary": summarize(text or label or "erreur"), "files": []}
         if kind in {"file_change", "commit"}:
@@ -144,20 +152,23 @@ class Extractor:
         if not isinstance(content, list):
             return []
         out = []
-        for block in content:
+        for index, block in enumerate(content):
+            # `part` is the block position, so a replay after a restart gives each event the same id even when the
+            # in-memory call table (lost on restart) changes how a result is classified.
             if not isinstance(block, dict) or tap_source.is_private(block):
                 continue
             kind = block.get("type")
+            event = None
             if kind == "text":
                 text = tap_source.visible_text(block.get("text"))
                 if text:
-                    out.append({"kind": "user_prompt" if role == "user" else "assistant_text", "summary": summarize(text), "files": []})
+                    event = {"kind": "user_prompt" if role == "user" else "assistant_text", "summary": summarize(text), "files": []}
             elif kind == "tool_use":
-                out.append(self._call(block.get("name"), block.get("input"), block.get("id")))
+                event = self._call(block.get("name"), block.get("input"), block.get("id"))
             elif kind == "tool_result":
                 event = self._result(block.get("tool_use_id"), tap_source.strip_injected(_result_text(block.get("content"))), bool(block.get("is_error")))
-                if event:
-                    out.append(event)
+            if event:
+                out.append({**event, "part": index})
         return out
 
     def codex(self, record: dict) -> list[dict]:

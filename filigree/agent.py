@@ -23,6 +23,10 @@ from .store import Store
 LOG_MAX_BYTES = 512 * 1024
 
 
+class AgentRunning(ValueError):
+    """Another agent already serves this data folder (a normal outcome for an autostart, not a failure)."""
+
+
 def info_path(root) -> Path:
     return Path(root) / ".runtime" / "agent.json"
 
@@ -68,7 +72,7 @@ def run_agent(root, port: int = 7820, env=None, interval: float = 5.0, out=print
     lock = ProcessLock(root / ".runtime" / "agent.lock")
     if not lock.acquire():
         existing = running_agent(root)
-        raise ValueError("Un agent Filigree tourne déjà pour ce dossier de données" + (f" : {existing['url']}" if existing else "."))
+        raise AgentRunning("Un agent Filigree tourne déjà pour ce dossier de données" + (f" : {existing['url']}" if existing else "."))
     store = Store(root)
     server = None
     stop = stop_event or threading.Event()
