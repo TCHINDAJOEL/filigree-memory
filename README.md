@@ -14,7 +14,18 @@ Your repository remembers what changed. Filigree helps preserve **why it changed
 
 ## Quickstart: a memory that follows your folders
 
-📖 **[Guide d'utilisation illustré (français)](docs/guide/README.md)**: installation, every screen, agents, hooks, troubleshooting.
+📖 **Documentation (French):** [Prise en main, application par application](docs/guide/prise-en-main.md) (start here: Claude Code, Claude Desktop, Codex CLI, Codex app, claude.ai, ChatGPT) · [Guide complet illustré](docs/guide/README.md) (every screen, how it works, security, troubleshooting).
+
+![How Filigree works](docs/guide/images/schema-architecture.svg)
+
+| You use | Filigree observes your sessions | The agent reads the memory (MCP) | Setup |
+| --- | --- | --- | --- |
+| Claude Code (terminal, VS Code, JetBrains) | Yes: native transcripts | Yes: `claude mcp add` (scope from MCP roots) | [A](docs/guide/prise-en-main.md#a-claude-code) |
+| Claude Desktop, Code tab | Yes, through the Claude Code transcript | Yes: `claude_desktop_config.json` | [B](docs/guide/prise-en-main.md#b-claude-desktop) |
+| Claude Desktop, chat | No | Yes: `claude_desktop_config.json` | [B](docs/guide/prise-en-main.md#b-claude-desktop) |
+| Codex CLI | Yes: rollouts + state database | Yes: `codex mcp add` | [C](docs/guide/prise-en-main.md#c-codex-cli) |
+| Codex app (Codex Desktop, VS Code extension) | Yes: same `~/.codex` files as the CLI | Same `config.toml` as the CLI | [D](docs/guide/prise-en-main.md#d-application-codex-et-extension-vs-code) |
+| claude.ai, ChatGPT | No | No (remote services) | [E](docs/guide/prise-en-main.md#e-claudeai-et-chatgpt): `import-export` |
 
 ```sh
 git clone https://github.com/TCHINDAJOEL/filigree-memory.git && cd filigree-memory
@@ -133,9 +144,9 @@ python -m filigree --data-dir /absolute/path/to/memory mcp
 
 Tools: `list_projects`, `project_for_folder`, `search_memory`, `get_handoff` (option `accepted_only`), `propose_memory`, and the read-only `project_activity` and `active_sessions` (unreviewed journal data). `project_for_folder` is read-only: it returns the project registered for an absolute folder (nearest registered ancestor) and never creates one.
 
-Since v0.2 the server is **scoped to one project**: the one registered for its working directory (MCP clients start it in your project folder), or the one given by `--project-folder DIR`. `--all-projects` serves every project explicitly. A call outside the scope is refused.
+Since v0.2 the server is **scoped to one project**. Without an explicit option, it asks the client for its MCP *roots* (its working folders) and serves the projects registered there, falling back to its own working directory. Claude Code does not start MCP servers in the session folder, so this matters, and it is verified live. `--project-folder DIR` serves one given project (required for Claude Desktop); `--all-projects` serves every project explicitly. A call outside the scope is refused.
 
-To see the exact configuration for your client, run `filigree --data-dir /absolute/path/to/memory mcp-config --client claude` (or `codex`). It only **prints** the snippet; you install it yourself, once, and Filigree never edits an agent configuration, `CLAUDE.md` or `AGENTS.md`. Without that MCP configuration, an agent cannot recall the memory; automatic capture only *writes* proposals. The transport implements the MCP 2025-11-25 initialization and tools subset over stdio. It does not claim certification or integration testing with every client. See [the integration contract](.aiwg/architecture/claude-tap-integration.md).
+To see the exact configuration for your client, run `filigree mcp-config --client claude|codex|claude-desktop` (add `--command` for the one-line `claude mcp add …` / `codex mcp add …`, and `--project-folder DIR` or `--all-projects` to fix the scope). It only **prints** the snippet; you install it yourself, once, and Filigree never edits an agent configuration, `CLAUDE.md` or `AGENTS.md`. Without that MCP configuration, an agent cannot recall the memory; automatic capture only *writes* proposals. The transport implements the MCP 2025-11-25 initialization and tools subset over stdio. It does not claim certification or integration testing with every client. See [the integration contract](.aiwg/architecture/claude-tap-integration.md).
 
 ## Architecture
 

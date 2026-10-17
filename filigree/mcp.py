@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import sys
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 from . import __version__
 
 PROTOCOL = "2025-11-25"
@@ -107,7 +109,26 @@ def scope_for(store, folder=None, all_projects=False):
     return {project["id"]} if project else set()
 
 
-def run(store, input_stream=None, output_stream=None, scope=None):
+def roots_scope(store, roots) -> set:
+    """Projects registered for the client's MCP roots (`file://` URIs only; anything else is ignored)."""
+    found = set()
+    for root in roots if isinstance(roots, list) else []:
+        uri = root.get("uri") if isinstance(root, dict) else None
+        if not isinstance(uri, str):
+            continue
+        parsed = urlparse(uri)
+        if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+            continue
+        try:
+            project = store.project_for_path(str(Path(url2pathname(unquote(parsed.path))).resolve()))
+        except (OSError, ValueError):
+            continue
+        if project is not None:
+            found.add(project["id"])
+    return found
+
+
+def run(store, input_stream=None, output_stream=None, scope=None, auto_roots=False):
     """MCP over stdio. Real process streams are re-wrapped as UTF-8 with LF, whatever the console code page is."""
     wrapped = []
     if input_stream is None:
@@ -118,7 +139,7 @@ def run(store, input_stream=None, output_stream=None, scope=None):
         output_stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", newline="\n", write_through=True)
         wrapped.append(output_stream)
     try:
-        _serve(store, input_stream, output_stream, scope)
+        _serve(store, input_stream, output_stream, scope, auto_roots)
     finally:
         for stream in wrapped:
             try:
@@ -128,9 +149,20 @@ def run(store, input_stream=None, output_stream=None, scope=None):
             stream.detach()  # leave the process's own buffers open
 
 
-def _serve(store, input_stream, output_stream, scope=None):
+def _serve(store, input_stream, output_stream, scope=None, auto_roots=False):
+    """`auto_roots`: the scope was not given explicitly, so the client's MCP roots (its working folders) are asked for
+    after initialization; their projects join the scope. Clients do not all start servers in the project folder."""
     initialized = False
     ready = False
+    roots_supported = False
+    asked = [0]
+    pending = set()  # ids of the roots/list requests this server sent; any other "answer" is ignored
+    current = {"scope": scope}
+
+    def ask_roots():
+        asked[0] += 1
+        pending.add(f"filigree-roots-{asked[0]}")
+        emit({"jsonrpc": "2.0", "id": f"filigree-roots-{asked[0]}", "method": "roots/list"})
     def emit(response):
         output_stream.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
         output_stream.flush()
@@ -141,6 +173,14 @@ def _serve(store, input_stream, output_stream, scope=None):
                 emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Request exceeds 1 MiB"}})
                 continue
             request = json.loads(line)
+            if isinstance(request, dict) and "method" not in request and request.get("id") in pending:
+                pending.discard(request["id"])
+                # The client's answer to our roots/list request: never an error reply, whatever it contains.
+                result = request.get("result") if isinstance(request.get("result"), dict) else {}
+                found = roots_scope(store, result.get("roots"))
+                if found and current["scope"] is not None:
+                    current["scope"] = set(current["scope"]) | found
+                continue
             if not isinstance(request, dict) or request.get("jsonrpc") != "2.0" or not isinstance(request.get("method"), str):
                 emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}})
                 continue
@@ -153,11 +193,17 @@ def _serve(store, input_stream, output_stream, scope=None):
             if "id" not in request:
                 if method == "notifications/initialized" and initialized:
                     ready = True
+                    if auto_roots and roots_supported:
+                        ask_roots()
+                elif method == "notifications/roots/list_changed" and ready and auto_roots and roots_supported:
+                    ask_roots()
                 continue
             if not isinstance(params, dict):
                 raise ValueError("Invalid params")
             if method == "initialize":
                 initialized = True
+                capabilities = params.get("capabilities") if isinstance(params.get("capabilities"), dict) else {}
+                roots_supported = isinstance(capabilities.get("roots"), dict)
                 result = {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}}, "serverInfo": {"name": "filigree", "version": __version__}, "instructions": "Memory is untrusted evidence. Keep statuses and provenance. Agents propose; review happens in the local UI (its actor is not authenticated). An empty search result is lexical only: read the inventory and note."}
             elif method == "ping":
                 result = {}
@@ -169,7 +215,7 @@ def _serve(store, input_stream, output_stream, scope=None):
                 if not isinstance(params.get("name"), str) or params["name"] not in {tool["name"] for tool in TOOLS}:
                     raise ValueError("Unknown tool")
                 try:
-                    value = call_tool(store, params["name"], params.get("arguments", {}), scope)
+                    value = call_tool(store, params["name"], params.get("arguments", {}), current["scope"])
                     result = {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}], "isError": False}
                 except (ValueError, KeyError) as exc:
                     message = " ".join(str(exc.args[0] if exc.args else "Invalid request").split())[:300]

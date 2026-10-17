@@ -83,9 +83,9 @@ def build_memory(paths) -> dict:
     return {"project_id": project["id"], "old": old["id"], "new": new["id"], "open": question["id"], "token": token, "statuses": {key: entry["status"] for key, entry in entries.items()}}
 
 
-def write_mcp_config(paths):
+def write_mcp_config(paths, cwd_scope=False):
     """A fresh file used by this one invocation only. Nothing is added to any user or project configuration."""
-    config = {"mcpServers": {SERVER: {"command": str(Path(sys.executable).resolve()), "args": ["-m", "filigree", "--data-dir", str(paths["memory"].resolve()), "mcp", "--project-folder", str(paths["folder"].resolve())], "env": {"PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}}}}
+    config = {"mcpServers": {SERVER: {"command": str(Path(sys.executable).resolve()), "args": ["-m", "filigree", "--data-dir", str(paths["memory"].resolve()), "mcp", *([] if cwd_scope else ["--project-folder", str(paths["folder"].resolve())])], "env": {"PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}}}}
     paths["mcp_config"].write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
@@ -227,6 +227,7 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--check-only", action="store_true", help="build the synthetic memory and the MCP file, make no Claude call")
+    parser.add_argument("--cwd-scope", action="store_true", help="omit --project-folder: the server must find the project from the folder Claude launches it in")
     args = parser.parse_args()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     debug = {"stamp": stamp}
@@ -237,7 +238,7 @@ def main():
         create_baseline_db(paths["db"])
         memory = build_memory(paths)
         debug["memory"] = {key: value for key, value in memory.items() if key != "token"}
-        write_mcp_config(paths)
+        write_mcp_config(paths, args.cwd_scope)
         step("mémoire synthétique construite (décision remplacée, décision actuelle, question ouverte) ; configuration MCP temporaire écrite")
         if args.check_only:
             step("PASS (--check-only) : mémoire et configuration prêtes ; aucun appel Claude")

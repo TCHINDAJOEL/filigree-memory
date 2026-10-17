@@ -19,10 +19,13 @@ The permanent local observer ([ADR-0003](.aiwg/architecture/ADR-0003-permanent-o
 - MCP tools `project_activity` and `active_sessions`, plus the `accepted_only` option for `get_handoff`.
 - `filigree import-export FILE --project ID` for ChatGPT and claude.ai exports (`.json` or `.zip`).
 - `filigree status`: what is installed and running, and the artifacts in the data folder.
+- MCP scope from the client's **roots** (`roots/list`). Claude Code does not start MCP servers in the session folder; this was verified live.
+- `filigree mcp-config --client claude-desktop`, `--project-folder`, `--all-projects`, and `--command`, which prints the one-line `claude mcp add` / `codex mcp add` command.
+- French documentation in `docs/guide/`: a quick start for each application, a complete guide illustrated with real screenshots, and explanatory diagrams (`scripts/guide_diagrams.py`).
 
 ### Changed
 - **The local key is now required on every `/api/*` route, reads included.** The key persists in `.runtime/agent.key` and is shared by all servers of one data folder. `GET /api/bootstrap` no longer lists projects. Scripts that read the API must send `X-Filigree-Token` (get it from `/api/bootstrap`).
-- **`filigree mcp` is scoped to the project of its working directory.** Use `--project-folder DIR` or `--all-projects` to change the scope.
+- **`filigree mcp` is scoped to one project:** the projects of the client's MCP roots, otherwise that of its working directory. Use `--project-folder DIR` or `--all-projects` to set the scope explicitly.
 - `capture.json` gains an `activity` section (`enabled`, `retention_days`, `turn_proposals`). Setting `turn_proposals: false` stops the v0.1 per-turn proposals.
 - CI also runs on macOS.
 

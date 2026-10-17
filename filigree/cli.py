@@ -52,15 +52,37 @@ def _source_checkout():
     return parent
 
 
-def mcp_config(client, data_dir):
+def _shell_line(parts) -> str:
+    if os.name == "nt":
+        return " ".join('"' + part + '"' if any(ch in part for ch in ' \t"&|<>^') or not part else part for part in parts)
+    import shlex
+    return shlex.join(parts)
+
+
+def mcp_config(client, data_dir, project_folder=None, all_projects=False, as_command=False):
     """Configuration text for the user to install themselves. Filigree writes no agent file.
 
     It names the interpreter running this command and, when the package is not installed, the source directory, so the
-    entry launches `python -m filigree` from any working directory."""
+    entry launches `python -m filigree` from any working directory. `claude` and `codex` start the server in the
+    project folder, so its default scope (that folder's project) fits; Claude Desktop has no project folder, so it
+    needs an explicit `project_folder` or `all_projects`. `as_command` prints the one-line `claude mcp add` /
+    `codex mcp add` command instead of the configuration block."""
     arguments = ["-m", "filigree", "--data-dir", str(Path(data_dir).resolve()), "mcp"]
+    if project_folder is not None:
+        arguments += ["--project-folder", str(Path(project_folder).resolve())]
+    elif all_projects:
+        arguments.append("--all-projects")
+    elif client == "claude-desktop":
+        raise ValueError("Claude Desktop ne lance pas le serveur MCP depuis votre projet : ajoutez --project-folder DOSSIER (un projet) ou --all-projects (tous).")
     command = sys.executable or "python"
     checkout = _source_checkout()
-    if client == "claude":
+    if as_command:
+        if client == "claude":
+            return _shell_line(["claude", "mcp", "add", "--scope", "user", "filigree", *(["-e", f"PYTHONPATH={checkout}"] if checkout else []), "--", command, *arguments])
+        if client == "codex":
+            return _shell_line(["codex", "mcp", "add", "filigree", *(["--env", f"PYTHONPATH={checkout}"] if checkout else []), "--", command, *arguments])
+        raise ValueError("Claude Desktop n'a pas de commande d'ajout : collez la configuration JSON dans claude_desktop_config.json.")
+    if client in {"claude", "claude-desktop"}:
         entry = {"command": command, "args": arguments}
         if checkout:
             entry["env"] = {"PYTHONPATH": str(checkout)}
@@ -221,7 +243,11 @@ def main(argv=None):
     chat.add_argument("file", type=Path)
     chat.add_argument("--project", required=True, help="Target project id (always explicit)")
     config = sub.add_parser("mcp-config", help="Print (never install) the MCP configuration for a client")
-    config.add_argument("--client", choices=["claude", "codex"], required=True)
+    config.add_argument("--client", choices=["claude", "codex", "claude-desktop"], required=True)
+    config_scope = config.add_mutually_exclusive_group()
+    config_scope.add_argument("--project-folder", type=Path, help="Serve this folder's project (required for claude-desktop unless --all-projects)")
+    config_scope.add_argument("--all-projects", action="store_true", help="Serve every project explicitly")
+    config.add_argument("--command", dest="as_command", action="store_true", help="Print the one-line `claude mcp add` / `codex mcp add` command instead")
     capture = sub.add_parser("capture", help="Automatic capture of agent sessions")
     actions = capture.add_subparsers(dest="action", required=True)
     run = actions.add_parser("run", help="Run the monitor in the foreground")
@@ -255,7 +281,7 @@ def main(argv=None):
             start(args.data_dir, args.port, not args.no_capture)
             return
         if args.command == "mcp-config":
-            print(mcp_config(args.client, args.data_dir))
+            print(mcp_config(args.client, args.data_dir, args.project_folder, args.all_projects, args.as_command))
             return
         if args.command == "signal":
             from .hooks import signal as record
@@ -275,7 +301,8 @@ def main(argv=None):
             return capture_command(store, args)
         if args.command == "mcp":
             from .mcp import run, scope_for
-            run(store, scope=scope_for(store, args.project_folder, args.all_projects))
+            explicit = args.project_folder is not None or args.all_projects
+            run(store, scope=scope_for(store, args.project_folder, args.all_projects), auto_roots=not explicit)
             return
         if args.command == "setup":
             from .capture import Capture

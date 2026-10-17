@@ -48,7 +48,24 @@ log.add({"session_key": "codex:51c0:thread-77ad", "client": "codex", "model": "g
 print(distill_project(store, pid, {}, idle_minutes=10))
 `, memory, projectId, workFolder);
 
-(async () => {
+// `--diagrams`: render the SVG diagrams drawn by scripts/guide_diagrams.py to PNG (for the Word export) and stop.
+async function renderDiagrams() {
+  const browser = await chromium.launch();
+  for (const file of fs.readdirSync(images).filter(name => name.startsWith('schema-') && name.endsWith('.svg'))) {
+    const svg = fs.readFileSync(path.join(images, file), 'utf8');
+    const [, width, height] = svg.match(/width="(\d+)" height="(\d+)"/);
+    const page = await browser.newPage({viewport: {width: +width, height: +height}, deviceScaleFactor: 2});
+    await page.setContent(`<html><body style="margin:0">${svg}</body></html>`);
+    await page.screenshot({path: path.join(images, file.replace('.svg', '.png'))});
+    await page.close();
+    console.log('✓', file.replace('.svg', '.png'));
+  }
+  await browser.close();
+}
+
+if (process.argv.includes('--diagrams')) {
+  renderDiagrams().catch(error => { console.error(error); process.exit(1); });
+} else (async () => {
   // A real agent (capture + observer), confined to empty synthetic sources: nothing of the machine is read.
   const isolated = {CLAUDE_CONFIG_DIR: path.join(base, 'sources', 'claude'), CODEX_HOME: path.join(base, 'sources', 'codex'), APPDATA: path.join(base, 'sources', 'roaming'), LOCALAPPDATA: path.join(base, 'sources', 'local'), CLOUDTAP_DB: path.join(base, 'absent.sqlite3')};
   const server = spawn('python', ['-m', 'filigree', '--data-dir', memory, 'agent', '--port', String(port)], {env: {...process.env, PYTHONPATH: root, ...isolated}});

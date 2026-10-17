@@ -2,11 +2,13 @@
 
 > **Gardez le pourquoi.** Filigree est la mémoire locale de vos projets, partagée par les personnes et leurs agents IA (Claude Code, Codex). Il conserve les décisions, les corrections, les options écartées et leurs sources. Depuis la version 0.2, il observe aussi en continu ce que font vos agents.
 
-Ce guide s'adresse aux développeuses et développeurs qui découvrent Filigree. Comptez **10 minutes** pour l'installer et voir votre première session d'agent apparaître. Les captures d'écran viennent de la vraie interface, alimentée par des données fictives (`node scripts/guide_screenshots.cjs` les régénère).
+Ce guide s'adresse aux développeuses et développeurs qui découvrent Filigree. Comptez **10 minutes** pour l'installer et voir votre première session d'agent apparaître. Les captures d'écran viennent de la vraie interface, alimentée par des données fictives (`node scripts/guide_screenshots.cjs` les régénère). Les schémas sont produits par `python scripts/guide_diagrams.py`.
+
+> **Pressé ?** Le [guide de prise en main](prise-en-main.md) donne directement les commandes pour Claude Code, Claude Desktop, Codex CLI, l'application Codex, claude.ai et ChatGPT.
 
 ## Sommaire
 
-1. [Ce que fait Filigree](#1-ce-que-fait-filigree)
+1. [Ce que fait Filigree](#1-ce-que-fait-filigree), [comment ça marche](#comment-ça-marche)
 2. [Installer](#2-installer)
 3. [Démarrer en cinq minutes](#3-démarrer-en-cinq-minutes)
 4. [Découvrir l'interface](#4-découvrir-linterface)
@@ -29,6 +31,21 @@ Votre dépôt Git sait **ce qui** a changé. Filigree garde **pourquoi** : la pr
 - **Une reprise propre.** Le prochain humain ou le prochain agent reçoit un contexte clair : ce qui est actuel, ce qui reste incertain, et ce qui a été remplacé.
 - **Local et portable.** Pas de compte, pas de serveur distant, pas d'appel à un modèle. Les connaissances sont des fichiers Markdown que vous pouvez versionner avec Git.
 - **Nouveau en 0.2 :** un **agent local permanent** journalise l'activité de vos sessions (demandes, fichiers modifiés, tests, erreurs, commits). Il propose une **fiche par session** et signale quand deux sessions modifient le même fichier.
+
+### Comment ça marche
+
+![Architecture de Filigree](images/schema-architecture.svg)
+
+1. **Vos applications** (Claude Code, Codex, leurs applications de bureau) écrivent déjà leurs sessions sur votre disque. Filigree ne s'insère pas entre vous et le modèle.
+2. **L'agent Filigree** relit ces fichiers en lecture seule, toutes les quelques secondes, et ne garde que les sessions lancées dans un dossier de projet, sous une racine autorisée.
+3. Il en tire un **journal d'activité** et des **propositions**, dont une fiche par session.
+4. **Vous examinez.** Ce que vous acceptez devient la mémoire actuelle du projet : l'interface, la reprise et le serveur MCP la rendent aux agents suivants.
+
+![Le parcours d'une session](images/schema-session.svg)
+
+![Cycle de vie d'une connaissance](images/schema-revue.svg)
+
+La règle centrale : **rien de ce qui vient d'un agent ne devient une décision sans vous.**
 
 ## 2. Installer
 
@@ -228,13 +245,21 @@ filigree activity <ID_PROJET>          # journal récent, sessions actives, chev
 
 ## 6. Connecter vos agents (MCP et hooks)
 
+![Ce que Filigree fait pour chaque application](images/schema-applications.svg)
+
+Les commandes complètes, application par application, sont dans le [guide de prise en main](prise-en-main.md).
+
 ### MCP : permettre à l'agent de consulter la mémoire
 
-La capture *écrit* des propositions. Pour qu'un agent puisse **lire** la mémoire, ajoutez une fois le serveur MCP de Filigree à sa configuration. Filigree affiche la configuration à copier, sans jamais l'installer lui-même :
+La capture *écrit* des propositions. Pour qu'un agent puisse **lire** la mémoire, ajoutez une fois le serveur MCP de Filigree à sa configuration. Filigree affiche la commande ou la configuration à copier, sans jamais l'installer lui-même :
 
 ```sh
-filigree mcp-config --client claude    # ou : --client codex
+filigree mcp-config --client claude --command     # affiche « claude mcp add --scope user filigree -- … »
+filigree mcp-config --client codex --command      # affiche « codex mcp add filigree -- … »
+filigree mcp-config --client claude-desktop --project-folder ~/code/boutique   # JSON pour claude_desktop_config.json
 ```
+
+Sans `--command`, la configuration est affichée sous forme de bloc (JSON pour Claude, TOML pour Codex) :
 
 ```json
 {
@@ -258,9 +283,11 @@ Outils proposés aux agents :
 
 Aucun outil ne permet à un agent d'**accepter** quoi que ce soit.
 
-Depuis la version 0.2, le serveur MCP ne voit **que le projet du dossier où l'agent travaille**. Deux options changent ce périmètre :
-- `--project-folder DOSSIER` désigne un autre projet ;
+Depuis la version 0.2, le serveur MCP ne voit **que le projet du dossier où l'agent travaille**. Il l'apprend par les *roots* MCP : le client lui communique ses dossiers de travail. C'est vérifié en réel avec Claude Code, qui ne lance pas le serveur depuis le dossier du projet. Si un client ne fournit pas de roots, le serveur se rabat sur son dossier de lancement. Deux options rendent le périmètre explicite :
+- `--project-folder DOSSIER` désigne un projet précis, ce qui est obligatoire pour Claude Desktop ;
 - `--all-projects` les ouvre tous, explicitement.
+
+Si un agent répond « Project outside this MCP server's scope », ajoutez l'une de ces deux options dans sa configuration.
 
 ### Hooks : signaux de session et contexte au démarrage (optionnel)
 
@@ -351,7 +378,7 @@ filigree import-export ~/Téléchargements/export.zip --project <ID_PROJET>
 | `filigree import ID FICHIER` · `watch ID FICHIER` | Importer, ou surveiller, un fichier de traces |
 | `filigree import-export FICHIER --project ID` | Import ChatGPT ou claude.ai |
 | `filigree mcp [--project-folder D \| --all-projects]` | Serveur MCP sur stdio |
-| `filigree mcp-config --client claude\|codex` | Afficher la configuration MCP |
+| `filigree mcp-config --client claude\|codex\|claude-desktop [--command] [--project-folder D \| --all-projects]` | Afficher la commande ou la configuration MCP à installer vous-même |
 | `filigree hooks install\|uninstall\|status --client …` | Hooks optionnels |
 | `filigree service install\|uninstall\|status` | Démarrage automatique optionnel |
 | `filigree capture status\|pending\|link\|pause\|resume\|exclude…` | Piloter la capture fine |
@@ -395,7 +422,7 @@ Le détail figure dans [SECURITY.md](../../SECURITY.md).
 | « Capture désactivée » | Le serveur a été lancé avec `--no-capture`, ou `capture.json` contient une valeur invalide : `filigree capture status` affiche `settings_error`. |
 | Une session reste « en attente » | Ouvrez **Capture → Sessions non rattachées** et choisissez son projet, ou lancez `filigree capture link CLÉ ID_PROJET`. Une session hors racines y apparaît avec le motif `outside_roots`. |
 | Erreur 403 dans un script qui lit l'API | Depuis la 0.2, chaque appel doit envoyer l'en-tête `X-Filigree-Token`. Récupérez la clé via `GET /api/bootstrap`. |
-| L'agent MCP ne voit pas mon projet | Le serveur MCP sert le projet de son dossier de travail. Ajoutez `--project-folder DOSSIER` dans sa configuration si votre client le lance ailleurs. |
+| L'agent MCP ne voit pas mon projet (« outside this MCP server's scope ») | Le client n'a pas communiqué ses dossiers de travail (roots), ou le dossier n'appartient à aucun projet. Ajoutez `--project-folder DOSSIER` (ou `--all-projects`) dans sa configuration, ou régénérez-la avec `filigree mcp-config … --project-folder DOSSIER`. |
 | « Un agent Filigree tourne déjà » | C'est normal : un seul agent par dossier de données. `filigree status` donne son adresse. |
 | « Clé locale illisible ou corrompue » | Arrêtez Filigree, supprimez `.runtime/agent.key`, puis relancez : une nouvelle clé est créée. |
 | Codex : anciennes sessions absentes | Les journaux compressés `.zst` ne sont pas lus, et les sessions actives (non compressées) le sont. `filigree probe` indique ce qui est lisible. |

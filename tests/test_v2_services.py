@@ -224,6 +224,43 @@ class McpScopeTests(Temp):
             mcp.call_tool(self.store, "get_handoff", {"project_id": pid, "accepted_only": "yes"}, {pid})
 
 
+class McpRootsTests(Temp):
+    """Claude Code does not start MCP servers in the session folder: the scope comes from the client's MCP roots."""
+
+    def converse(self, roots_reply, capabilities=None, auto_roots=True):
+        mine = self.store.create_project("Mine", folder=str(self.folder))["id"]
+        other_folder = self.base / "autre"
+        other_folder.mkdir()
+        self.store.create_project("Other", folder=str(other_folder))
+        lines = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": capabilities if capabilities is not None else {"roots": {}}}},
+                 {"jsonrpc": "2.0", "method": "notifications/initialized"}, roots_reply,
+                 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "list_projects", "arguments": {}}}]
+        out = io.StringIO()
+        mcp.run(self.store, io.StringIO("\n".join(json.dumps(line) for line in lines) + "\n"), out, scope=mcp.scope_for(self.store, self.base), auto_roots=auto_roots)
+        replies = [json.loads(line) for line in out.getvalue().splitlines()]
+        listed = json.loads(replies[-1]["result"]["content"][0]["text"])
+        return mine, replies, [project["id"] for project in listed]
+
+    def test_roots_of_the_client_define_the_scope(self):
+        uri = self.folder.as_uri()
+        mine, replies, listed = self.converse({"jsonrpc": "2.0", "id": "filigree-roots-1", "result": {"roots": [{"uri": uri}]}})
+        self.assertEqual(replies[1]["method"], "roots/list")  # the server asked
+        self.assertEqual(listed, [mine])
+
+    def test_no_roots_capability_no_request_and_scope_stays_empty(self):
+        _, replies, listed = self.converse({"jsonrpc": "2.0", "method": "notifications/cancelled"}, capabilities={})
+        self.assertFalse(any(reply.get("method") == "roots/list" for reply in replies))
+        self.assertEqual(listed, [])
+
+    def test_foreign_uris_are_ignored(self):
+        _, _, listed = self.converse({"jsonrpc": "2.0", "id": "filigree-roots-1", "result": {"roots": [{"uri": "https://example.com/x"}, {"uri": "file://server/share"}]}})
+        self.assertEqual(listed, [])
+
+    def test_explicit_scope_never_asks_for_roots(self):
+        _, replies, listed = self.converse({"jsonrpc": "2.0", "id": "filigree-roots-1", "result": {"roots": [{"uri": self.folder.as_uri()}]}}, auto_roots=False)
+        self.assertFalse(any(reply.get("method") == "roots/list" for reply in replies))
+        self.assertEqual(listed, [])
+
 class ChatExportTests(Temp):
     def chatgpt(self):
         return [{"id": "conv-1", "title": "Choix de base", "current_node": "n3", "mapping": {
@@ -296,6 +333,32 @@ class CliTests(Temp):
         pid = self.store.create_project("App", folder=str(self.folder))["id"]
         result = self.run_cli("activity", pid)
         self.assertEqual(result["stats"], {"events": 0, "sessions": 0})
+
+
+
+class McpConfigTests(Temp):
+    def config(self, *argv):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            cli.main(["--data-dir", str(self.data), "mcp-config", *argv])
+        return output.getvalue()
+
+    def test_claude_desktop_requires_an_explicit_scope(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["--data-dir", str(self.data), "mcp-config", "--client", "claude-desktop"])
+        entry = json.loads(self.config("--client", "claude-desktop", "--project-folder", str(self.folder)))["mcpServers"]["filigree"]
+        self.assertEqual(entry["args"][-2:], ["--project-folder", str(self.folder)])
+        self.assertIn("--all-projects", json.loads(self.config("--client", "claude-desktop", "--all-projects"))["mcpServers"]["filigree"]["args"])
+
+    def test_one_line_commands_for_claude_code_and_codex(self):
+        claude = self.config("--client", "claude", "--command")
+        self.assertTrue(claude.startswith("claude mcp add --scope user filigree"))
+        self.assertIn(" -- ", claude)
+        self.assertTrue(claude.rstrip().endswith("mcp"))
+        codex = self.config("--client", "codex", "--command")
+        self.assertTrue(codex.startswith("codex mcp add filigree"))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["--data-dir", str(self.data), "mcp-config", "--client", "claude-desktop", "--all-projects", "--command"])
 
 
 if __name__ == "__main__":

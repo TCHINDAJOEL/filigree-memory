@@ -25,3 +25,14 @@ Total: 4 model calls, as planned.
 - Real installation of the hooks in the user's `~/.claude/settings.json`, and of the autostart: not done, because that would change the user's configuration.
 - macOS and Linux in real use.
 - Each result comes from one run on one machine and gives no guarantee for other versions.
+
+## MCP scope without `--project-folder` (October 17, 2026, about 18:52 and 18:56 UTC)
+
+The prise-en-main guide was going to state that `claude mcp add --scope user` is enough, because the server scopes itself to the project of the folder Claude works in. This was checked with `verify_live_handoff.py --cwd-scope`: the MCP configuration omits `--project-folder`, and Claude is launched from the project folder.
+
+| Run | Source | Result |
+| --- | --- | --- |
+| 5 | Before the fix | **FAIL**. The client got 0 of 3 entries, and the server answered "outside this server's scope". When the same server is launched directly from the project folder, it does find the project. Conclusion: **Claude Code does not start MCP servers in the session folder.** The claim would have been false. |
+| 6 | After the fix: the server asks the client for its MCP *roots* (`roots/list`) when no scope is explicit, and accepts only replies to requests it actually sent | **PASS** in 10.9 s. Haiku retrieves the memory without `--project-folder` and gives the 3 exact ids. |
+
+That makes 6 model calls in total. Codex was not checked live for roots support: the guide says so and gives the `--project-folder` fallback.
