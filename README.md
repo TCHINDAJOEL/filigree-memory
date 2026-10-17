@@ -246,6 +246,8 @@ python scripts/verify_agent_e2e.py             # real `filigree agent` process, 
 
 Node is a development-only dependency. The Python tests cover persistence, provenance, governance, concurrent writers, recovery, imports, MCP, HTTP boundaries, Git clone portability and capture. Browser tests exercise actual user journeys. CI is configured for Windows/Linux/macOS and Python 3.11/3.14; the [verification report](.aiwg/testing/verification.md) distinguishes local evidence, source-only checks and CI runs.
 
+`scripts/verify_live_observer.py` (v0.2) is a manual, opt-in live check of the observer: a real `filigree agent` must journal one real Claude Code (haiku) session started in a synthetic folder and propose its session sheet. Latest results of all live checks: [v2-live-verification.md](.aiwg/testing/v2-live-verification.md).
+
 `scripts/verify_live_capture.py` is a separate, **manual, opt-in** smoke check outside the suites above: it makes one bounded `claude-tap` call (Claude Code, model `haiku`, 300 s, no retry) in a synthetic folder, against a fresh claude-tap database and memory under `.runtime/live-capture/`. It consumes model quota and proves one client on one machine only. `--check-only` verifies the isolation without calling Claude.
 
 ## Contributing
