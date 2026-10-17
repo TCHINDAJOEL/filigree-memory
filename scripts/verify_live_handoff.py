@@ -85,7 +85,7 @@ def build_memory(paths) -> dict:
 
 def write_mcp_config(paths):
     """A fresh file used by this one invocation only. Nothing is added to any user or project configuration."""
-    config = {"mcpServers": {SERVER: {"command": str(Path(sys.executable).resolve()), "args": ["-m", "filigree", "--data-dir", str(paths["memory"].resolve()), "mcp"], "env": {"PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}}}}
+    config = {"mcpServers": {SERVER: {"command": str(Path(sys.executable).resolve()), "args": ["-m", "filigree", "--data-dir", str(paths["memory"].resolve()), "mcp", "--project-folder", str(paths["folder"].resolve())], "env": {"PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}}}}
     paths["mcp_config"].write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 

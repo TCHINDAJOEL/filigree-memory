@@ -551,6 +551,22 @@ class Capture:
             settings["exclude"] = kept + ([path] if excluded else [])
         self._update(change)
 
+    def set_allowed_roots(self, roots):
+        """None keeps the v0.1 behaviour; a list of existing absolute folders confines resolution and creation."""
+        if roots is not None:
+            clean = []
+            for root in roots:
+                path = Path(root).expanduser()
+                if not path.is_absolute() or not path.is_dir():
+                    raise ValueError(f"Racine autorisée invalide (dossier absolu existant attendu) : {root}")
+                clean.append(str(path.resolve()))
+            roots = list(dict.fromkeys(clean))
+
+        def change(settings):
+            settings["allowed_roots"] = roots
+        self._update(change)
+        return roots
+
     def set_native_fallback(self, enabled: bool):
         self._update(lambda s: s["sources"].update(native_fallback=bool(enabled)))
         self._hold(fallback_only=True)  # the tap cursors are unaffected: tap activity is never discarded by this toggle

@@ -289,6 +289,8 @@ class Handler(BaseHTTPRequestHandler):
                 tail = parts[3:]
                 if not tail and method == "GET":
                     return self.send(200, project)
+                if tail == ["activity"] and method == "GET":
+                    return self.send(200, project_activity(store, pid, query.get("limit", "200")))
                 if not tail and method == "PATCH":
                     if set(data) != {"folder"} or not isinstance(data["folder"], str):
                         raise ValueError("Seul le champ folder (chemin absolu) peut être rattaché.")
@@ -389,7 +391,24 @@ class Handler(BaseHTTPRequestHandler):
     do_PUT = do_DELETE = do_OPTIONS = do_HEAD = refuse
 
 
+def project_activity(store, project_id: str, limit="200") -> dict:
+    """Unreviewed journal view of one project: recent events, sessions, active sessions and overlapping edits."""
+    from .activity import ActivityLog, journal_path
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        raise ValueError("limit doit être un entier entre 1 et 1000.") from None
+    log = ActivityLog(journal_path(store, project_id))
+    return {"note": "Données d'activité non revues, extraites automatiquement : ce sont des indices, pas des connaissances acceptées.",
+            "stats": log.stats(), "events": log.events(limit=limit), "sessions": log.sessions()[:100], "active": log.sessions(active_minutes=15), "overlaps": log.overlaps()}
+
+
 def serve(root, port=7820, capture=True, env=None):
+    from .agent import running_agent
+    existing = running_agent(root)
+    if existing is not None:
+        print(f"Un agent Filigree sert déjà ce dossier de données : {existing['url']}", flush=True)
+        return
     try:
         server = LocalServer(("127.0.0.1", port), Store(Path(root)), capture_enabled=capture, env=env)
     except OSError as exc:

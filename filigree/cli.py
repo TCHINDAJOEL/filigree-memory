@@ -110,6 +110,51 @@ def capture_command(store, args):
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def _launcher() -> list[str]:
+    """How a hook or service starts this Filigree: the installed module, or this source checkout."""
+    python = sys.executable or "python"
+    checkout = _source_checkout()
+    if checkout:
+        return [python, "-c", f"import sys;sys.path.insert(0,{str(checkout)!r});from filigree.cli import main;main()"]
+    return [python, "-m", "filigree"]
+
+
+def v2_command(args) -> dict:
+    """probe / status / service / hooks: JSON reports; installation only on an explicit action."""
+    data_dir = args.data_dir.expanduser().resolve()
+    if args.command == "probe":
+        from .probe import run_probe
+        return run_probe()
+    if args.command == "service":
+        from . import service
+        planned = service.current_plan(data_dir)
+        if args.service_action == "status" or args.dry_run:
+            return {**service.status(planned, service.SystemRunner()), "plan": {key: value for key, value in planned.items() if key in {"command", "path", "text", "description"}}}
+        return (service.apply if args.service_action == "install" else service.remove)(planned, service.SystemRunner())
+    if args.command == "hooks":
+        from . import hooks
+        if args.hooks_action == "status":
+            return hooks.status(data_dir)
+        if not args.client:
+            raise ValueError("--client claude|codex est requis pour install/uninstall.")
+        return hooks.change(args.client, args.hooks_action, data_dir, _launcher(), inject=args.inject, dry_run=args.dry_run)
+    from . import hooks, service
+    from .activity import ActivityLog, journal_path
+    from .agent import running_agent
+    from .capture import Capture
+    store = Store(data_dir)
+    settings, error = Capture(store).settings()
+    try:
+        autostart = service.status(service.current_plan(data_dir), service.SystemRunner())
+    except (ValueError, OSError) as exc:
+        autostart = {"installed": False, "error": str(exc)}
+    journals = {project["id"]: ActivityLog(journal_path(store, project["id"])).stats() for project in store.list_projects() if journal_path(store, project["id"]).exists()}
+    artifacts = sorted(path.relative_to(data_dir).as_posix() for folder in (".runtime", ".capture") for path in (data_dir / folder).glob("*") if path.is_file())
+    return {"version": __version__, "data_dir": str(data_dir), "agent": running_agent(data_dir), "autostart": autostart, "hooks": hooks.status(data_dir),
+            "capture": {"enabled": settings["enabled"], "settings_error": error, "allowed_roots": settings["allowed_roots"], "activity": settings["activity"]},
+            "journals": journals, "artifacts": artifacts}
+
+
 def main(argv=None):
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
@@ -143,7 +188,38 @@ def main(argv=None):
     watch.add_argument("--interval", type=_interval, default=3)
     export = sub.add_parser("export", help="Export readable Markdown to stdout")
     export.add_argument("project_id")
-    sub.add_parser("mcp", help="Serve read/propose tools over MCP stdio")
+    mcp = sub.add_parser("mcp", help="Serve read/propose tools over MCP stdio (scoped to the current folder's project)")
+    scope = mcp.add_mutually_exclusive_group()
+    scope.add_argument("--project-folder", type=Path, help="Serve the project registered for this folder instead of the current one")
+    scope.add_argument("--all-projects", action="store_true", help="Explicitly serve every project of the data folder")
+    agent = sub.add_parser("agent", help="Run the permanent observer: workbench, capture and activity journal")
+    agent.add_argument("--port", type=_port, default=7820)
+    agent.add_argument("--interval", type=_interval, default=5.0)
+    sub.add_parser("probe", help="Read-only probe of local agent sources (counts and field names only)")
+    setup = sub.add_parser("setup", help="Choose the folders Filigree may observe (allowed roots)")
+    setup.add_argument("--root", action="append", type=Path, default=[], help="Allowed root folder (repeatable)")
+    setup.add_argument("--any-folder", action="store_true", help="Remove the restriction (v0.1 behaviour)")
+    sub.add_parser("status", help="Show what Filigree has installed and is running (JSON)")
+    service = sub.add_parser("service", help="Start the agent automatically at login (user scope, opt-in)")
+    service.add_argument("service_action", choices=["install", "uninstall", "status"])
+    service.add_argument("--dry-run", action="store_true")
+    hooks = sub.add_parser("hooks", help="Opt-in agent hooks: session signals and optional context injection")
+    hooks.add_argument("hooks_action", choices=["install", "uninstall", "status"])
+    hooks.add_argument("--client", choices=["claude", "codex"])
+    hooks.add_argument("--inject", action="store_true", help="Claude SessionStart: add the project's accepted knowledge to the session")
+    hooks.add_argument("--dry-run", action="store_true")
+    signal = sub.add_parser("signal", help=argparse.SUPPRESS)
+    signal.add_argument("--client", choices=["claude", "codex"], required=True)
+    signal.add_argument("--event", required=True)
+    signal.add_argument("--session-id", default="")
+    signal.add_argument("--inject", action="store_true")
+    signal.add_argument("payload", nargs="?", default=None)
+    activity = sub.add_parser("activity", help="Show a project's unreviewed activity journal (JSON)")
+    activity.add_argument("project_id")
+    activity.add_argument("--limit", type=int, default=50)
+    chat = sub.add_parser("import-export", help="Import a ChatGPT or claude.ai export (.json or .zip) as proposals")
+    chat.add_argument("file", type=Path)
+    chat.add_argument("--project", required=True, help="Target project id (always explicit)")
     config = sub.add_parser("mcp-config", help="Print (never install) the MCP configuration for a client")
     config.add_argument("--client", choices=["claude", "codex"], required=True)
     capture = sub.add_parser("capture", help="Automatic capture of agent sessions")
@@ -181,14 +257,46 @@ def main(argv=None):
         if args.command == "mcp-config":
             print(mcp_config(args.client, args.data_dir))
             return
+        if args.command == "signal":
+            from .hooks import signal as record
+            raise SystemExit(record(args.data_dir, args.client, args.event, args.session_id, args.inject, args.payload))
+        if args.command == "agent":
+            from .agent import run_agent
+            run_agent(args.data_dir, args.port, interval=max(args.interval, 1.0), out=lambda line: print(line, flush=True))
+            return
+        if args.command in {"probe", "status", "service", "hooks"}:
+            print(json.dumps(v2_command(args), ensure_ascii=False, indent=2))
+            return
         store = Store(args.data_dir)
         if args.command == "capture":
             return capture_command(store, args)
         if args.command == "mcp":
-            from .mcp import run
-            run(store)
+            from .mcp import run, scope_for
+            run(store, scope=scope_for(store, args.project_folder, args.all_projects))
             return
-        if args.command == "create":
+        if args.command == "setup":
+            from .capture import Capture
+            if args.any_folder == bool(args.root):
+                raise ValueError("Indiquez au moins un --root DOSSIER, ou --any-folder pour lever la restriction.")
+            roots = Capture(store).set_allowed_roots(None if args.any_folder else [str(root) for root in args.root])
+            result = {"allowed_roots": roots, "next": ["filigree agent  (ou : filigree service install)", "filigree mcp-config --client claude|codex", "filigree hooks install --client claude --dry-run"]}
+        elif args.command == "activity":
+            from .server import project_activity
+            store.get_project(args.project_id)
+            result = project_activity(store, args.project_id, args.limit)
+        elif args.command == "import-export":
+            from .chat_export import parse_chat_export
+            store.get_project(args.project)
+            parsed = parse_chat_export(args.file)
+            total = {"format": parsed["format"], "conversations": parsed["conversations"], "messages": len(parsed["events"]), "imported": 0, "duplicates": 0}
+            while True:
+                step = store.import_events(args.project, parsed["events"], f"export {parsed['format']} · {args.file.name}")
+                total["imported"] += step["imported"]
+                total["duplicates"] = step["duplicates"]
+                if not step.get("remaining") or not step["imported"]:
+                    break
+            result = total
+        elif args.command == "create":
             result = store.create_project(args.name, args.description, folder=args.folder)
         elif args.command == "attach":
             result = store.attach_folder(args.project_id, args.folder)
