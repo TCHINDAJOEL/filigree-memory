@@ -7,7 +7,7 @@ never touch the real registry, the real HOME or systemd. Nothing is installed un
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import platform
 import subprocess
 import sys
@@ -32,7 +32,8 @@ def plan(system: str, python: str, data_dir, home, env=None, checkout=None) -> d
     """What `install` would write, for `system` in {Windows, Darwin, Linux}. Pure: no I/O."""
     data_dir, home, env = str(Path(data_dir)), Path(home), dict(env or {})
     if system == "Windows":
-        pythonw = str(Path(python).with_name("pythonw.exe")) if Path(python).name.lower() == "python.exe" else python
+        interpreter = PureWindowsPath(python)  # a Windows plan is Windows paths, whatever system computes it
+        pythonw = str(interpreter.with_name("pythonw.exe")) if interpreter.name.lower() == "python.exe" else python
         command = " ".join(_quote_windows(part) for part in [*_launcher(pythonw, checkout), "--data-dir", data_dir, "agent"])
         return {"system": system, "kind": "registry", "key": RUN_KEY, "name": VALUE_NAME, "command": command, "description": f"HKCU\\{RUN_KEY} → « {VALUE_NAME} »"}
     arguments = [*_launcher(python, checkout), "--data-dir", data_dir, "agent"]
