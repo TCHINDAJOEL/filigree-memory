@@ -435,12 +435,12 @@ class SubprocessServerTests(unittest.TestCase):
         port = self.wait_port(process)
         _, bootstrap = self.call(port, "GET", "/api/bootstrap")
         token = bootstrap["token"]
-        self.assertEqual(self.call(port, "GET", "/api/capture")[1]["tap"]["capability"], "disabled")
+        self.assertEqual(self.call(port, "GET", "/api/capture", token=token)[1]["tap"]["capability"], "disabled")
         for action in ("enable", "start", "scan", "fallback-on"):
             code, value = self.call(port, "POST", "/api/capture", {"action": action}, token)
             self.assertEqual(code, 409, action)
         time.sleep(1.0)
-        self.assertEqual(self.call(port, "GET", "/api/projects")[1], [])
+        self.assertEqual(self.call(port, "GET", "/api/projects", token=token)[1], [])
         self.assertFalse((self.base / "memory" / ".capture").exists())
         self.assertFalse((self.base / "absent-tap").exists())
 
@@ -452,7 +452,8 @@ class SubprocessServerTests(unittest.TestCase):
         self.assertEqual(second.returncode, 1)
         self.assertIn("Impossible d'écouter", err.decode("utf-8"))
         self.assertNotIn(b"Traceback", err)
-        self.assertEqual(self.call(port, "GET", "/api/capture")[0], 200)  # the first server still owns the port
+        token = self.call(port, "GET", "/api/bootstrap")[1]["token"]
+        self.assertEqual(self.call(port, "GET", "/api/capture", token=token)[0], 200)  # the first server still owns the port
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ To see the exact configuration for your client, run `filigree --data-dir /absolu
 ## Architecture
 
 ```text
- claude-tap SQLite (read-only, schema v4) ──┐                         ┌─ Web workbench  (127.0.0.1, token-protected writes)
+ claude-tap SQLite (read-only, schema v4) ──┐                         ┌─ Web workbench  (127.0.0.1, local key on every API call)
  native Claude / Codex transcripts ─────────┤  capture monitor        ├─ CLI            (filigree …)
    (sessionId + cwd; new lines, fallback)   ├─ exact session id ──▶  Store ─ MCP stdio   (read + propose only)
  explicit imports (JSON, JSONL, notes) ─────┘  → folder → project     └─ Markdown files + optional Git checkpoints

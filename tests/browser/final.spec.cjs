@@ -151,5 +151,7 @@ test('quarantined entry and event files are announced instead of silently omitte
   await expect(notice).toContainText('11111111-1111-4111-8111-111111111111.md');
   await expect(notice).toContainText('2026-01-01-corrompu.json');
   await expect(notice).toContainText('Rien n’a été modifié ni supprimé');
-  expect(fs.readFileSync(path.join(broken.data, 'projects', (await (await fetch(broken.origin + '/api/projects')).json())[0].id, '.filigree', 'events', '2026-01-01-corrompu.json'), 'utf8')).toBe('{');
+  const {token} = await (await fetch(broken.origin + '/api/bootstrap')).json();  // API reads need the local key
+  const listed = await (await fetch(broken.origin + '/api/projects', {headers: {'X-Filigree-Token': token}})).json();
+  expect(fs.readFileSync(path.join(broken.data, 'projects', listed[0].id, '.filigree', 'events', '2026-01-01-corrompu.json'), 'utf8')).toBe('{');
 });

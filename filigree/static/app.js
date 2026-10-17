@@ -24,11 +24,11 @@ const pendingReasons = {no_native_id:'La trace ne porte aucun identifiant de ses
 const captureFolderNotice = project => project.folder?`<p class="folder-line">Dossier du projet : <code>${escapeHTML(project.folder.path)}</code>${project.folder_state==='missing'?' <span class="folder-warning">Ce dossier est introuvable sur ce disque.</span>':''}</p>`:`<div class="callout unbound" role="note"><strong>Ce projet n’est rattaché à aucun dossier.</strong> La capture automatique ne peut pas lui attribuer de session tant qu’un dossier local existant n’est pas choisi. <button class="button secondary small" data-action="attach-folder">Rattacher un dossier</button></div>`;
 let toastTimer;
 function toast(message, error = false) { const el=$('#toast');el.textContent=message;el.className=`visible${error?' error':''}`;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.className='',4500); }
-// A write started before the bootstrap answer (a fast click on a fresh page) waits for the session token instead of failing with a 403.
+// Every API call except the bootstrap carries the local key; a call started before the bootstrap answer waits for it instead of failing with a 403.
 let bootstrapped;
 async function api(path, options={}) {
-  if(options.method&&options.method!=='GET'&&!state.token&&bootstrapped)await bootstrapped.catch(()=>{});
-  const headers = {'Accept':'application/json',...(options.body?{'Content-Type':'application/json'}:{}),...(options.method&&options.method!=='GET'?{'X-Filigree-Token':state.token}:{}),...options.headers};
+  if(path!=='/api/bootstrap'&&!state.token&&bootstrapped)await bootstrapped.catch(()=>{});
+  const headers = {'Accept':'application/json',...(options.body?{'Content-Type':'application/json'}:{}),...(path!=='/api/bootstrap'?{'X-Filigree-Token':state.token}:{}),...options.headers};
   let response;
   try { response=await fetch(path,{...options,headers,body:options.body?JSON.stringify(options.body):undefined}); }
   catch { throw new Error('Le serveur local ne répond pas. Vérifiez que Filigree est démarré, puis réessayez.'); }

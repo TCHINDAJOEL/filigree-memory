@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import socket
+import re
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
@@ -103,6 +104,33 @@ class DisabledCapture:
         raise CaptureOff()  # any control (start, set_enabled, link, scan...) is refused
 
 
+KEY_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,256}")
+
+
+def agent_key(root) -> str:
+    """<data-dir>/.runtime/agent.key: created once, then reused by every server, MCP and hook of this data folder.
+
+    Owner-only permissions are applied where the OS supports them; any process of the same OS user can still read it."""
+    path = Path(root) / ".runtime" / "agent.key"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+            handle.write(secrets.token_urlsafe(32))
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    key = path.read_text(encoding="ascii", errors="replace").strip()
+    if not KEY_PATTERN.fullmatch(key):
+        raise ValueError(f"Clé locale illisible ou corrompue : supprimez {path} puis relancez Filigree (une nouvelle clé sera créée).")
+    return key
+
+
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     # The default backlog (5) makes Windows reset connections when a page load and its polling open several at once.
@@ -120,7 +148,7 @@ class LocalServer(ThreadingHTTPServer):
             self.capture = Capture(store, env)  # not started here: serve() decides
         else:
             self.capture = DisabledCapture(store)
-        self.token = secrets.token_urlsafe(32)
+        self.token = agent_key(store.root)
         super().__init__(address, Handler)
 
     def server_bind(self):
@@ -205,7 +233,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Un objet JSON est requis.")
         return value
 
-    def allowed(self, mutation=False):
+    def allowed(self, authenticated=False):
         port = self.server.server_address[1]
         hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         if (self.headers.get("Host") or "").lower() not in hosts:
@@ -218,14 +246,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Sec-Fetch-Site") == "cross-site":
             self.send(403, {"error": "Requête intersite refusée."})
             return False
-        if mutation and not secrets.compare_digest(self.headers.get("X-Filigree-Token", ""), self.server.token):
+        if authenticated and not secrets.compare_digest(self.headers.get("X-Filigree-Token", ""), self.server.token):
             self.send(403, {"error": "Jeton de session absent ou périmé. Rechargez la page."})
             return False
         return True
 
     def dispatch(self, method):
         self.connection.settimeout(15)
-        if not self.allowed(method != "GET"):
+        path = urlsplit(self.path).path
+        # Every API route needs the local key, reads included (ADR-0003); only the bootstrap hands it to the same-origin page.
+        if not self.allowed(method != "GET" or (path.startswith("/api/") and path != "/api/bootstrap")):
             return
         try:
             url = urlsplit(self.path)
@@ -238,7 +268,7 @@ class Handler(BaseHTTPRequestHandler):
                 mime = {"index.html": "text/html", "app.js": "text/javascript", "styles.css": "text/css"}[name]
                 return self.send(200, (STATIC / name).read_bytes(), mime + "; charset=utf-8")
             if parts == ["api", "bootstrap"] and method == "GET":
-                return self.send(200, {"projects": store.list_projects(), "token": self.server.token, "version": __version__})
+                return self.send(200, {"token": self.server.token, "version": __version__})
             if parts == ["api", "demo"] and method == "POST":
                 return self.send(201, seed_demo(store))
             if parts == ["api", "capture"]:
