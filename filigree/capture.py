@@ -26,7 +26,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from . import native_index, tap_source
+from . import native_index, resolver, tap_source
 from .store import ConflictError, PreRedacted, redact_whole
 
 CAPTURE_DIR = ".capture"
@@ -70,7 +70,7 @@ def _utc() -> str:
 
 
 def default_settings() -> dict:
-    return {"enabled": True, "auto_create": True, "paused_all": False, "tap": {"enabled": True, "db": None}, "sources": {"native_index": True, "native_fallback": True}, "roots": {"claude": None, "codex": None}, "exclude": [], "paused": []}
+    return {"enabled": True, "auto_create": True, "paused_all": False, "tap": {"enabled": True, "db": None}, "sources": {"native_index": True, "native_fallback": True}, "roots": {"claude": None, "codex": None}, "exclude": [], "paused": [], "allowed_roots": None}
 
 
 def normalize_settings(raw):
@@ -101,6 +101,12 @@ def normalize_settings(raw):
                 if not isinstance(raw[key], list) or len(raw[key]) > 200 or any(not isinstance(item, str) or not item or "\x00" in item for item in raw[key]):
                     raise ValueError(key)
                 settings[key] = list(dict.fromkeys(raw[key]))
+        if raw.get("allowed_roots") is not None:
+            roots = raw["allowed_roots"]
+            # null keeps the v0.1 behaviour; a list confines resolution and project creation to those folders (ADR-0003)
+            if not isinstance(roots, list) or len(roots) > 200 or any(not isinstance(item, str) or not item or "\x00" in item or not Path(item).is_absolute() for item in roots):
+                raise ValueError("allowed_roots")
+            settings["allowed_roots"] = list(dict.fromkeys(roots))
         return settings, None
     except ValueError as exc:
         settings["enabled"] = False
@@ -699,6 +705,9 @@ class Capture:
         root = next((candidate for candidate in resolved if all(candidate == other or candidate in other.parents for other in resolved)), None)
         if root is None:
             return {"status": "ambiguous_cwd"}
+        roots = ctx.settings["allowed_roots"]
+        if roots is not None and not resolver.under_roots(root, roots):
+            return {"status": "outside_roots"}  # key only: no folder, no text, no project
         evidence = {"native_source": matches[0]["source"], "native_file": Path(matches[0]["file"]).name, "cwd": str(root)}
         if self._is_excluded(ctx, root):
             return {"status": "excluded", **evidence}
@@ -707,6 +716,10 @@ class Capture:
             project = self.store.locate_project(str(path))
             if project and project.get("folder") and _is_generic(project["folder"]["path"], self.env):
                 project = None  # a project bound to a shared location (temp, users, system) must not absorb what lies below it
+            if project is None:
+                project = self._worktree_project(path)
+                if project is not None:
+                    evidence["worktree_of"] = project["folder"]["path"]
             projects.append(project["id"] if project else None)
         if any(projects):
             if len(set(projects)) != 1:
@@ -741,6 +754,19 @@ class Capture:
             return {"status": "cwd_refused", **evidence}
         ctx.projects[project["id"]] = project
         return {"status": "ok", "project_id": project["id"], **evidence}
+
+    def _worktree_project(self, path: Path):
+        """Project registered exactly at the main repository of a proven linked worktree, else None."""
+        git = _git_root(path)
+        main = resolver.proven_worktree_main(git) if git is not None else None
+        if main is None or _is_generic(main, self.env):
+            return None
+        project = self.store.locate_project(str(main))
+        if not project or not project.get("folder"):
+            return None
+        if os.path.normcase(str(Path(_plain_path(project["folder"]["path"])))) != os.path.normcase(str(Path(_plain_path(str(main.resolve()))))):
+            return None  # only the repository's own project, never an ancestor that happens to contain it
+        return project
 
     def _link(self, ctx, session_id: str, ids: set) -> dict:
         values = {value for _, value in ids}
@@ -810,7 +836,7 @@ class Capture:
         agent = tap_source.agent_label(kinds, client)
         slug = "codex" if agent == "Codex" else "claude-code"
         evidence = outcome.get("evidence", {})
-        provenance = {"collector": "claude-tap", "tap_db_key": db_key, "tap_session_id": session_id, "record_index": index, "payload_sha256": digest, "native_id": outcome.get("native_id"), "link": outcome["mode"], "native_source": evidence.get("native_source"), "native_file": evidence.get("native_file"), "cwd": evidence.get("cwd"), "claim": "identifiants déclaratifs, non authentifiés"}
+        provenance = {"collector": "claude-tap", "tap_db_key": db_key, "tap_session_id": session_id, "record_index": index, "payload_sha256": digest, "native_id": outcome.get("native_id"), "link": outcome["mode"], "native_source": evidence.get("native_source"), "native_file": evidence.get("native_file"), "cwd": evidence.get("cwd"), **({"worktree_of": evidence["worktree_of"]} if evidence.get("worktree_of") else {}), "claim": "identifiants déclaratifs, non authentifiés"}
         if outcome["mode"] == "explicit":
             # The folder is where the user chose to file this session; it is not evidence from a native transcript.
             provenance.update(target_folder=outcome.get("target_folder"), target_basis="dossier du projet choisi explicitement par l'utilisateur ; aucune preuve de dossier natif")
@@ -1292,7 +1318,7 @@ class Capture:
         for number, item, mark in kept:
             text, found = redact_whole(item["text"])  # before the title/excerpt cuts below
             who = f"Humain via {agent}" if item["kind"] == "user_text" else agent
-            provenance = {"collector": "native-fallback", "native_id": native, "native_source": source, "native_file": Path(path).name, "cwd": resolution.get("cwd"), "link": "explicit" if resolution.get("explicit") else "native", "claim": "transcription locale, non authentifiée"}
+            provenance = {"collector": "native-fallback", "native_id": native, "native_source": source, "native_file": Path(path).name, "cwd": resolution.get("cwd"), "link": "explicit" if resolution.get("explicit") else "native", **({"worktree_of": resolution["worktree_of"]} if resolution.get("worktree_of") else {}), "claim": "transcription locale, non authentifiée"}
             if resolution.get("explicit"):
                 provenance.update(target_folder=(project.get("folder") or {}).get("path"), target_basis="dossier du projet choisi explicitement par l'utilisateur ; aucune preuve de dossier natif")
             ctx.events.setdefault(project_id, []).append(PreRedacted({
