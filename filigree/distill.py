@@ -26,6 +26,19 @@ def _parse(text):
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
+def _when(text) -> str:
+    moment = _parse(text)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if moment else "?"
+
+
+def _shown(name: str, cwd) -> str:
+    """A path relative to the session folder when it lies inside it; otherwise the full path (it is outside)."""
+    try:
+        return PurePath(name).relative_to(PurePath(cwd)).as_posix() if cwd else name
+    except ValueError:
+        return name
+
+
 def sheet_body(session: dict, events: list[dict]) -> str:
     """Markdown digest of one session. `events` are newest first, as the journal returns them."""
     ordered = list(reversed(events))
@@ -39,21 +52,22 @@ def sheet_body(session: dict, events: list[dict]) -> str:
     lines = [
         f"Fiche générée sans modèle à partir du journal d'activité local (données non revues). Client : {CLIENT_LABELS.get(session['client'], session['client'])}"
         + (f" · modèle {session['model']}" if session.get("model") else "") + (f" · {session['entrypoint']}" if session.get("entrypoint") else "") + ".",
-        f"Période : {session.get('first_ts') or '?'} → {session.get('last_ts') or '?'} · {len(ordered)} événement(s)" + (" · session terminée." if session.get("ended") else "."),
-        "", "## Demandes", *([f"- {event['summary']}" for event in prompts[:5]] or ["- (aucune demande visible)"]),
+        f"Période : {_when(session.get('first_ts'))} → {_when(session.get('last_ts'))} · {len(ordered)} événement(s)" + (" · session terminée." if session.get("ended") else "."),
+        "", "Demandes", *([f"- {event['summary']}" for event in prompts[:5]] or ["- (aucune demande visible)"]),
     ]
+    cwd = session.get("cwd")
     if len(prompts) > 5:
         lines.append(f"- … et {len(prompts) - 5} autre(s)")
-    lines += ["", "## Fichiers modifiés", *([f"- `{name}` ({count}×)" for name, count in files.most_common(20)] or ["- (aucun)"])]
+    lines += ["", "Fichiers modifiés", *([f"- {_shown(name, cwd)} ({count}×)" for name, count in files.most_common(20)] or ["- (aucun)"])]
     if len(files) > 20:
         lines.append(f"- … et {len(files) - 20} autre(s)")
     if outside:
-        lines += ["", f"⚠ {len(outside)} fichier(s) modifié(s) hors du dossier du projet : " + ", ".join(f"`{PurePath(name).name}`" for name in outside[:10])]
-    lines += ["", "## Commandes", *([f"- {name} ({count}×)" for name, count in commands.most_common(10)] or ["- (aucune)"])]
+        lines += ["", f"⚠ {len(outside)} fichier(s) modifié(s) hors du dossier du projet : " + ", ".join(name for name in outside[:10])]
+    lines += ["", "Commandes", *([f"- {name} ({count}×)" for name, count in commands.most_common(10)] or ["- (aucune)"])]
     if kinds["commit"]:
         lines.append(f"- git commit ({kinds['commit']}×)")
-    lines += ["", "## Tests", *([f"- {event['summary']}" for event in tests[-5:]] or ["- (aucun test observé)"])]
-    lines += ["", "## Erreurs", *([f"- {event['summary']}" for event in errors[-5:]] or ["- (aucune)"])]
+    lines += ["", "Tests", *([f"- {event['summary']}" for event in tests[-5:]] or ["- (aucun test observé)"])]
+    lines += ["", "Erreurs", *([f"- {event['summary']}" for event in errors[-5:]] or ["- (aucune)"])]
     if len(errors) > 5:
         lines.append(f"- … {len(errors)} erreur(s) au total")
     lines += ["", "Les résumés sont expurgés puis tronqués ; les lignes de commande ne sont jamais conservées, seul le programme l'est. Une commande réussie ne prouve pas que le besoin est satisfait."]

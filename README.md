@@ -14,6 +14,8 @@ Your repository remembers what changed. Filigree helps preserve **why it changed
 
 ## Quickstart: a memory that follows your folders
 
+📖 **[Guide d'utilisation illustré (français)](docs/guide/README.md)**: installation, every screen, agents, hooks, troubleshooting.
+
 ```sh
 git clone https://github.com/TCHINDAJOEL/filigree-memory.git && cd filigree-memory
 python -m pip install .                                    # Python 3.11+, no runtime dependency

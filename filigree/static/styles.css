@@ -46,3 +46,4 @@
 .activity-meta { font-size: .8rem; color: var(--muted, #6b6559); white-space: nowrap; }
 .callout.warning { border-left-color: #d68a1f; }
 @media (max-width: 700px) { .activity-event { grid-template-columns: 1fr; gap: 2px; } .activity-meta { white-space: normal; } }
+.callout code { overflow-wrap: anywhere; word-break: break-word; }
