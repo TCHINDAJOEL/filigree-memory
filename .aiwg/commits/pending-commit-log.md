@@ -1,41 +1,37 @@
-# Pending commit log — portable button target
+# Pending commit log — verified release evidence
 
 ## Summary
-Keep the add-project button above the minimum clickable size across font platforms.
+Record passing cross-platform CI and close the release gate.
 
 ## Why
-Linux Chromium measured 23.6875px at a 768px viewport; the existing accessibility regression requires at least 24px.
+Make the published acceptance decision traceable to exact remote CI and package evidence.
 
 ## What Changed
-- Give the desktop/tablet sidebar add button a 28px minimum target and prevent shrinking.
-- Preserve existing mobile layout and every browser assertion.
-- Record the author diagnosis, independent local execution and refreshed synthetic screenshot; archive initial commit log.
+- Record successful five-job GitHub Actions run and the CSS-only corrective follow-up.
+- Archive the CSS correction's commit preparation log.
 
 ## How
-A single CSS rule defines minimum dimensions and centers the glyph independently of platform font metrics. No memory, capture, MCP or agent configuration changes.
+Documentation-only synthesis of executed evidence; no application, test or workflow changes. CI is deliberately skipped for this evidence commit; runtime/tests match tested source a61c377.
 
 ## Files Changed
-filigree/static/styles.css
-.github/assets/workbench.png
-.aiwg/testing/ci-button-correction.md
-.aiwg/testing/ci-button-verification.md
-.aiwg/commits/c08a7bf.md
+.aiwg/deployment/release-gate.md
+.aiwg/commits/a61c377.md
 .aiwg/commits/pending-commit-log.md
 
 ## Tests
-Independent Sonnet execution: all 28 Playwright tests passed, wheel rebuilt and isolated package check printed PASS. Evidence: .aiwg/testing/ci-button-verification.md. Initial GitHub run38971518619 passed all four Windows/Linux Python3.11/3.14 jobs; Linux browser rerun required after push. Core unchanged since the 301-test local run and five successful real Claude calls. Root reviewed CSS diff: the min-width651 media rule also applies at1440; the author's wording that1440isunchanged is imprecise, but the three viewport tests passed. No thresholds weakened.
+GitHub Actions38995801705 success on a61c377: Windows/Linux Python3.11/3.14 and Ubuntu browser. Independent local CSS retake28PlaywrightPASS and rebuilt wheel installationPASS. Earlier301Python local (onePOSIXskip) and five realClaude calls remain recorded in release-execution.md. No repeat needed for documentation-only edits. Diff whitespace checked.
 
 ## Risk
-Low: CSS target grows by four pixels; full browser suite covers overlap and reachable controls. Linux result remains to be confirmed remotely.
+Low: only evidence documentation changes. Remaining product limitations are documented in README, SECURITY and the gate.
 
 ## Rollback Plan
-Run `git revert --no-edit HEAD` while this correction is HEAD, then push; this restores the font-dependent target and will reintroduce the Linux test failure. It does not touch personal memory.
+Run `git revert --no-edit HEAD` while this documentation commit is HEAD; only gate and commit-log records change. Do not remove personal memory or trace files.
 
 ## Related Decisions
-.aiwg/architecture/ADR-0001-local-portable-memory.md.
+.aiwg/architecture/ADR-0001-local-portable-memory.md; .aiwg/architecture/ADR-0002-automatic-project-capture.md.
 
 ## Related Sessions
-.aiwg/testing/ci-button-correction.md; .aiwg/testing/ci-button-verification.md; .aiwg/testing/release-execution.md.
+.aiwg/testing/release-execution.md; .aiwg/testing/release-review-retake.md; .aiwg/testing/ci-button-verification.md.
 
 ## Commit Message Proposal
-fix(ui): keep project button target independent of font metrics
+docs: record verified cross-platform release [skip ci]

@@ -25,3 +25,16 @@ On one Windows machine, importing 3000 entries took about 65 seconds and a cold 
 ## Publication controls
 
 Only source, synthetic fixtures, documentation and review evidence are eligible. Runtime folders, traces, real conversations, personal memories, credentials and local task/checkpoint files are excluded. No diagnostic data belonging to other projects is included. Remote CI results will be recorded below after publication; local success does not imply CI success.
+
+## Published CI closure — 17 October 2026
+
+**GO confirmed.** Public repository: https://github.com/TCHINDAJOEL/filigree-memory.
+
+The initial CI found a Linux font-metric issue: the add-project button measured 23.6875px instead of the required minimum24px at768px. Sonnet fixed the CSS to use a28px minimum without changing test thresholds; independent local execution again passed all28browser tests and rebuilt/installed the wheel. Evidence: [correction](../testing/ci-button-correction.md) and [verification](../testing/ci-button-verification.md).
+
+[GitHub Actions run38995801705](https://github.com/TCHINDAJOEL/filigree-memory/actions/runs/38995801705) completed **success** for source commit `a61c377a6d8f9db92938cc89fc90e3b9ce884ad9`:
+- Python3.11 and3.14 on Ubuntu: success.
+- Python3.11 and3.14 on Windows: success.
+- Chromium/Playwright on Ubuntu: success.
+
+The final evidence commit changes documentation only; the released runtime and tests are identical to that CI-tested source. The wheel contains21package/metadata files and no runtime memory or trace directories; SHA256 `2cf7bc14ac8b022b0e86ae4ad7a1e57880b6ce7d549b924f6329e5b1d3091181`.
