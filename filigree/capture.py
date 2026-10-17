@@ -70,7 +70,7 @@ def _utc() -> str:
 
 
 def default_settings() -> dict:
-    return {"enabled": True, "auto_create": True, "paused_all": False, "tap": {"enabled": True, "db": None}, "sources": {"native_index": True, "native_fallback": True}, "roots": {"claude": None, "codex": None}, "exclude": [], "paused": [], "allowed_roots": None}
+    return {"enabled": True, "auto_create": True, "paused_all": False, "tap": {"enabled": True, "db": None}, "sources": {"native_index": True, "native_fallback": True}, "roots": {"claude": None, "codex": None}, "exclude": [], "paused": [], "allowed_roots": None, "activity": {"enabled": True, "retention_days": 90, "turn_proposals": True}}
 
 
 def normalize_settings(raw):
@@ -107,6 +107,17 @@ def normalize_settings(raw):
             if not isinstance(roots, list) or len(roots) > 200 or any(not isinstance(item, str) or not item or "\x00" in item or not Path(item).is_absolute() for item in roots):
                 raise ValueError("allowed_roots")
             settings["allowed_roots"] = list(dict.fromkeys(roots))
+        if "activity" in raw:
+            section = raw["activity"]
+            if not isinstance(section, dict):
+                raise ValueError("activity")
+            for key, value in section.items():
+                if key in {"enabled", "turn_proposals"} and type(value) is bool:
+                    settings["activity"][key] = value
+                elif key == "retention_days" and type(value) is int and 1 <= value <= 3650:
+                    settings["activity"][key] = value
+                else:
+                    raise ValueError(f"activity.{key}")
         return settings, None
     except ValueError as exc:
         settings["enabled"] = False
@@ -867,6 +878,13 @@ class Capture:
         return events
 
     def _flush(self, state, ctx):
+        if not ctx.settings["activity"]["turn_proposals"]:
+            # Per-turn proposals are off (ADR-0003): only the activity journal and session sheets remain.
+            dropped = sum(len(events) for events in ctx.events.values())
+            if dropped:
+                self._count(state, "turn_proposals_off", dropped, bucket="skipped")
+            ctx.events.clear()
+            return
         for project_id, events in list(ctx.events.items()):
             for start in range(0, len(events), 500):
                 chunk = events[start:start + 500]
