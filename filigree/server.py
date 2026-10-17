@@ -158,7 +158,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Filigree/0.1"
+    server_version = "Filigree"
 
     body_consumed = False
 

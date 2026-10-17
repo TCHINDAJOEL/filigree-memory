@@ -1,0 +1,36 @@
+# Changelog
+
+All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
+
+## [0.2.0] — 2026-10-17
+
+The permanent local observer ([ADR-0003](.aiwg/architecture/ADR-0003-permanent-observer.md)).
+
+### Added
+- `filigree agent`: one background process per data folder that serves the workbench, runs capture and the activity journal, and announces itself in `.runtime/agent.json`. `filigree serve` hands over to a running agent.
+- Per-project activity journal `projects/<id>/.filigree/activity.sqlite`. Events are prompts, file changes, commands (program name only), tests, errors and commits, extracted deterministically from Claude Code and Codex transcripts. Retention is 90 days, and the journal never goes into Git checkpoints or exports.
+- Session sheets: one proposal per session after 10 idle minutes or a session-end signal. A sheet is revised while it is proposed; once it has been reviewed, new activity becomes a separate "suite" proposal.
+- **Activité** view in the workbench, plus `GET /api/projects/<id>/activity` and `filigree activity`.
+- Read-only collectors for Claude Code, Claude Desktop (metadata only), Codex state and Codex rollouts, plus claude-tap. `filigree probe` reports counts and field names only.
+- `filigree setup --root DIR`: allowed roots (`allowed_roots` in `capture.json`). A session outside them stays pending as `outside_roots`.
+- A linked git worktree whose link is proven both ways joins its main repository's project.
+- `filigree service install|uninstall|status`: start at login, per user, through the HKCU Run key, a LaunchAgent or a systemd user unit.
+- `filigree hooks install|uninstall|status --client claude|codex`, with `--dry-run`, a timestamped backup and an install log. The `--inject` option adds accepted knowledge only.
+- MCP tools `project_activity` and `active_sessions`, plus the `accepted_only` option for `get_handoff`.
+- `filigree import-export FILE --project ID` for ChatGPT and claude.ai exports (`.json` or `.zip`).
+- `filigree status`: what is installed and running, and the artifacts in the data folder.
+
+### Changed
+- **The local key is now required on every `/api/*` route, reads included.** The key persists in `.runtime/agent.key` and is shared by all servers of one data folder. `GET /api/bootstrap` no longer lists projects. Scripts that read the API must send `X-Filigree-Token` (get it from `/api/bootstrap`).
+- **`filigree mcp` is scoped to the project of its working directory.** Use `--project-folder DIR` or `--all-projects` to change the scope.
+- `capture.json` gains an `activity` section (`enabled`, `retention_days`, `turn_proposals`). Setting `turn_proposals: false` stops the v0.1 per-turn proposals.
+- CI also runs on macOS.
+
+### Security
+- Command lines are never stored, and summaries are redacted before they are cut.
+- A corrupt key file is refused rather than replaced.
+- Hooks never overwrite invalid settings or an existing Codex `notify`.
+
+## [0.1.0] — 2026-10-16
+
+First release: a local Markdown memory with human review, a workbench, the CLI, MCP stdio, explicit imports and automatic capture from claude-tap and native transcripts.

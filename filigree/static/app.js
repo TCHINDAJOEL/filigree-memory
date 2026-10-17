@@ -436,4 +436,4 @@ document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const
 document.addEventListener('cancel',event=>{if(isDirty(event.target)){event.preventDefault();closeDialog(event.target);}},true);
 $('#detail').addEventListener('close',()=>{state.detailId='';$('#detail-content').innerHTML='';});
 setInterval(liveTick,6000);
-bootstrapped=api('/api/bootstrap');(async()=>{try{const data=await bootstrapped;state.token=data.token||data.csrf_token||'';$('#version').textContent=`v${data.version||'0.1.0'}`;const view=location.hash.slice(1);if(views[view])state.view=view;await refresh();loadCapture();}catch(error){$('#main').setAttribute('aria-busy','false');showViewError(error);}})();
+bootstrapped=api('/api/bootstrap');(async()=>{try{const data=await bootstrapped;state.token=data.token||data.csrf_token||'';$('#version').textContent=data.version?`v${data.version}`:'';const view=location.hash.slice(1);if(views[view])state.view=view;await refresh();loadCapture();}catch(error){$('#main').setAttribute('aria-busy','false');showViewError(error);}})();
