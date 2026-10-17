@@ -62,3 +62,10 @@ Playwright regenerates `.github/assets/workbench.png`. The file was restored aft
 - The journal cannot be rebuilt after the agents purge their transcripts.
 - **No independent review** of the V2 code (AGENTS.md requires one for substantial changes): to be scheduled before merging into `main`.
 - The D1 amendment to `AGENTS.md` (hooks are now opt-in) remains a human decision; the file was not modified.
+
+## GitHub CI on PR #1 (executed)
+
+- **First run, failed.** Run on `642748c`: Ubuntu 3.14 failed one test. `service.plan("Windows")` computed the `pythonw` path with `Path`, and on POSIX that does not recognise `C:\Py\python.exe` as a Windows path. This was a real portability defect.
+- **Fix.** Commit `b770877` switches to `PureWindowsPath` and sets `fail-fast: false`.
+- **Second run, all green.** GitHub Actions run `39059108414` on `b770877`: Ubuntu, Windows and macOS × Python 3.11 / 3.14, plus the browser job. **This was the first run on macOS, and it passed**: unit tests, `verify_agent_e2e.py` and the wheel build.
+
