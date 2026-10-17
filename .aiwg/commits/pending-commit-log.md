@@ -1,140 +1,41 @@
-# Pending commit log — initial release
+# Pending commit log — portable button target
 
 ## Summary
-Deliver Filigree 0.1.0, a local folder-bound shared project memory with a review workbench and MCP.
+Keep the add-project button above the minimum clickable size across font platforms.
 
 ## Why
-Keep decisions, their sources and historical alternatives available when people or coding agents resume a project.
+Linux Chromium measured 23.6875px at a 768px viewport; the existing accessibility regression requires at least 24px.
 
 ## What Changed
-- Portable revisioned memory, explicit proposal review, graph/history and bounded handoff.
-- Exact-folder TAP/native capture, source isolation, resilient imports and heuristic secret masking.
-- Local HTTP interface, read/propose MCP, project Git checkpoints and optional monitor startup scripts.
-- Synthetic regressions, actual Playwright journeys, isolated real Claude integration helpers, CI and documentation.
+- Give the desktop/tablet sidebar add button a 28px minimum target and prevent shrinking.
+- Preserve existing mobile layout and every browser assertion.
+- Record the author diagnosis, independent local execution and refreshed synthetic screenshot; archive initial commit log.
 
 ## How
-Python standard library runtime and static browser UI; development-only Playwright. AIWG author/reviewer/synthesis artifacts record the architecture, corrective iterations and executed acceptance.
+A single CSS rule defines minimum dimensions and centers the glyph independently of platform font metrics. No memory, capture, MCP or agent configuration changes.
 
 ## Files Changed
-.aiwg/architecture/ADR-0001-local-portable-memory.md
-.aiwg/architecture/ADR-0002-automatic-project-capture.md
-.aiwg/architecture/claude-tap-integration.md
-.aiwg/architecture/tap-source-study.md
-.aiwg/deployment/release-gate.md
-.aiwg/deployment/user-guide.md
-.aiwg/planning/delivery-plan.md
-.aiwg/planning/integration-findings.md
-.aiwg/requirements/automatic-capture.md
-.aiwg/requirements/user-stories.md
-.aiwg/requirements/vision.md
-.aiwg/testing/capture-acceptance.md
-.aiwg/testing/final-fixes.md
-.aiwg/testing/final-verification.md
-.aiwg/testing/followup-capture-2026-10-16.md
-.aiwg/testing/independent-verification-2026-10-16.md
-.aiwg/testing/live-independent-retake.md
-.aiwg/testing/live-journey-preparation.md
-.aiwg/testing/privacy-retake.md
-.aiwg/testing/probes-independent-retake.md
-.aiwg/testing/release-execution.md
-.aiwg/testing/release-review-retake.md
-.aiwg/testing/release-review.md
-.aiwg/testing/remediation-acceptance.md
-.aiwg/testing/remediation-capture.md
-.aiwg/testing/remediation-final-corrections.md
-.aiwg/testing/remediation-integration.md
-.aiwg/testing/remediation-opus-fixes.md
-.aiwg/testing/remediation-opus-risk.md
-.aiwg/testing/remediation-runner.md
-.aiwg/testing/remediation-services.md
-.aiwg/testing/remediation-store.md
-.aiwg/testing/remediation-ui.md
-.aiwg/testing/review-capture-opus.md
-.aiwg/testing/review-capture-orchestrator.md
-.aiwg/testing/review-domain.md
-.aiwg/testing/review-interface.md
-.aiwg/testing/review-product.md
-.aiwg/testing/review-synthesis.md
-.aiwg/testing/same-project-live-retake.md
-.aiwg/testing/toolless-capture-correction.md
-.aiwg/testing/verification.md
-.github/ISSUE_TEMPLATE/bug_report.md
-.github/assets/workbench.png
-.github/pull_request_template.md
-.github/workflows/ci.yml
-.gitignore
-AGENTS.md
-CONTRIBUTING.md
-LICENSE
-README.md
-SECURITY.md
-examples/capture.json
-examples/events.jsonl
-examples/mcp.json
-examples/tap-export.json
-filigree/__init__.py
-filigree/__main__.py
-filigree/capture.py
-filigree/cli.py
-filigree/demo.py
-filigree/git_sync.py
-filigree/importers.py
-filigree/mcp.py
-filigree/native_index.py
-filigree/server.py
-filigree/static/app.js
-filigree/static/index.html
 filigree/static/styles.css
-filigree/store.py
-filigree/tap_source.py
-package-lock.json
-package.json
-playwright.config.cjs
-pyproject.toml
-scripts/claude_runner.py
-scripts/install-capture-startup.ps1
-scripts/live_journey_browser.cjs
-scripts/resume-claude.ps1
-scripts/uninstall-capture-startup.ps1
-scripts/verify_live_capture.py
-scripts/verify_live_handoff.py
-scripts/verify_live_journey.py
-scripts/verify_package.py
-tests/browser/final.spec.cjs
-tests/browser/remediation.spec.cjs
-tests/browser/workbench.spec.cjs
-tests/tap_fixtures.py
-tests/test_adapters.py
-tests/test_capture.py
-tests/test_folders.py
-tests/test_http.py
-tests/test_live_journey_helper.py
-tests/test_privacy_retake.py
-tests/test_remediation_capture.py
-tests/test_remediation_final.py
-tests/test_remediation_opus.py
-tests/test_remediation_services.py
-tests/test_remediation_store.py
-tests/test_runner.py
-tests/test_store.py
+.github/assets/workbench.png
+.aiwg/testing/ci-button-correction.md
+.aiwg/testing/ci-button-verification.md
+.aiwg/commits/c08a7bf.md
 .aiwg/commits/pending-commit-log.md
 
 ## Tests
-301 Python tests run, OK with one POSIX-only skip on Windows; 28 Playwright passed; JS syntax, wheel build and isolated installation PASS. Real same-project fresh-reader journey and three capture/handoff helpers PASS, five bounded model calls. Evidence: .aiwg/testing/release-execution.md; independent review: .aiwg/testing/release-review-retake.md; synthesis: .aiwg/deployment/release-gate.md. Staged diff whitespace checked. Index audit excludes runtime/traces/private memory/task files; four credential-shaped findings are deliberate synthetic test fixtures, reviewed. Remote CI is pending the initial push.
+Independent Sonnet execution: all 28 Playwright tests passed, wheel rebuilt and isolated package check printed PASS. Evidence: .aiwg/testing/ci-button-verification.md. Initial GitHub run38971518619 passed all four Windows/Linux Python3.11/3.14 jobs; Linux browser rerun required after push. Core unchanged since the 301-test local run and five successful real Claude calls. Root reviewed CSS diff: the min-width651 media rule also applies at1440; the author's wording that1440isunchanged is imprecise, but the three viewport tests passed. No thresholds weakened.
 
 ## Risk
-Medium: capture relies on evolving local client formats and best-effort secret masking. Codex is fixture-tested only; optional startup scripts are not exercised. Folder identity and explicit acceptance limit accidental promotion, not all sensitive content.
+Low: CSS target grows by four pixels; full browser suite covers overlap and reachable controls. Linux result remains to be confirmed remotely.
 
 ## Rollback Plan
-For an immediate reversal while this initial release is HEAD, run `git revert --no-edit HEAD` and push the resulting revert. This removes tracked software, not ignored local memory/traces; it does not erase already published history. For a later reversal, select this initial release SHA explicitly. Never delete personal memory as rollback.
+Run `git revert --no-edit HEAD` while this correction is HEAD, then push; this restores the font-dependent target and will reintroduce the Linux test failure. It does not touch personal memory.
 
 ## Related Decisions
-.aiwg/architecture/ADR-0001-local-portable-memory.md; .aiwg/architecture/ADR-0002-automatic-project-capture.md.
+.aiwg/architecture/ADR-0001-local-portable-memory.md.
 
 ## Related Sessions
-.aiwg/testing/release-execution.md; .aiwg/testing/probes-independent-retake.md; .aiwg/testing/release-review-retake.md. Raw sessions remain private.
+.aiwg/testing/ci-button-correction.md; .aiwg/testing/ci-button-verification.md; .aiwg/testing/release-execution.md.
 
 ## Commit Message Proposal
-feat: release local project memory workbench
-
-Refs: ADR-0001, ADR-0002
+fix(ui): keep project button target independent of font metrics
