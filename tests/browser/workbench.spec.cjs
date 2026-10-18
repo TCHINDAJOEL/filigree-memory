@@ -251,3 +251,28 @@ test('a large captured history renders a page at a time with bounded excerpts', 
   await expect(page.locator('#entries-results .knowledge-row')).toHaveCount(100);
   expect(errors).toEqual([]);
 });
+
+test('raw captured traces are hidden by default and reachable through the « Afficher » filter', async ({page}) => {
+  await page.goto('/');
+  const name=`Traces et synthèses ${Date.now()}`;
+  const project=await apiProject(page, name, makeFolder('traces'));
+  // Entries shaped like the capture's (the API cannot set capture tags): tags decide the layer, a human acceptance turns a trace into knowledge.
+  const at='2026-10-18T10:00:00+00:00', make=(id,title,status,tags)=>({id,title,body:title,status,kind:'observation',agent:'Codex',episode:'',tags,sources:[],relations:[],revision:1,created_at:at,updated_at:at});
+  const entries=[make('11111111-1111-4111-8111-111111111111','Trace brute un','proposed',['capture','codex-history','trace']),make('22222222-2222-4222-8222-222222222222','Trace brute deux','proposed',['capture','claude-tap']),
+    make('33333333-3333-4333-8333-333333333333','Trace acceptée','accepted',['capture','claude-tap']),make('44444444-4444-4444-8444-444444444444','Fiche de fil · objectif','proposed',['codex-history','fiche']),
+    make('55555555-5555-4555-8555-555555555555','Ticket candidat · tests en échec','proposed',['codex-history','ticket']),make('66666666-6666-4666-8666-666666666666','Décision humaine','accepted',[])];
+  await page.route(`**/api/projects/${project.id}/entries`, route => route.fulfill({json: {entries}}));
+  await page.reload();
+  await page.getByLabel('Projet actif').selectOption(project.id);
+  await expect(page.locator('#project-name')).toHaveText(name);
+  await page.locator('[data-view="entries"]').first().click();
+  const titles=()=>page.locator('#entries-results .entry-title').allTextContents();
+  await expect(page.locator('.entry-count')).toContainText('4 connaissances · 2 traces brutes masquées');
+  expect((await titles()).sort()).toEqual(['Décision humaine','Fiche de fil · objectif','Ticket candidat · tests en échec','Trace acceptée']);
+  await page.getByLabel('Afficher').selectOption('trace');
+  expect((await titles()).sort()).toEqual(['Trace brute deux','Trace brute un']);
+  await page.getByLabel('Afficher').selectOption('ticket');
+  expect(await titles()).toEqual(['Ticket candidat · tests en échec']);
+  await page.getByLabel('Afficher').selectOption('all');
+  await expect(page.locator('#entries-results .knowledge-row')).toHaveCount(6);
+});

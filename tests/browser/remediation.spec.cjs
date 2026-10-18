@@ -295,6 +295,8 @@ test('D-6: native and tap proposals are labelled for what they are, with honest 
   await page.getByLabel('Projet actif').selectOption({label: 'Projet capturé'});
   await expect(page.locator('#project-name')).toHaveText('Projet capturé');
   await page.locator('[data-view="entries"]').click();
+  // Raw captured traces are hidden by default; the « Afficher » filter brings them back.
+  await page.getByLabel('Afficher').selectOption('all');
   const native = page.locator('.knowledge-row', {hasText: 'Je choisis SQLite'});
   const tap = page.locator('.knowledge-row', {hasText: 'Quelle base choisir'});
   await expect(native.locator('.entry-meta')).toContainText(/1 source(?!s)/);
