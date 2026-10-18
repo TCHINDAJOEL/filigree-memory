@@ -344,8 +344,11 @@ class Store:
     # A cached file is trusted only once it is older than this when read, or while no Filigree writer has committed.
     CACHE_SETTLE_SECONDS = 2.0
     # A settled cache hit is re-confirmed by content at most this often (external edits that keep size and mtime).
-    CACHE_REVALIDATE_SECONDS = 5.0
-    CACHE_MAX_FILES = 20000
+    # Re-hashing is the floor cost of every scan: at 5 s a 20 000-entry memory spent ~6 s per list_projects.
+    CACHE_REVALIDATE_SECONDS = 60.0
+    # Sized above real memories (a full history import reaches tens of thousands of entries): a cache smaller than
+    # the scanned set evicts on every pass and turns each scan into a cold read, past the 15 s lock timeout.
+    CACHE_MAX_FILES = 200000
     IMPORT_BATCH = 500
     IMPORT_MAX_INPUT_BYTES = 100_000_000
     IMPORT_MAX_NEW_BYTES = 5_000_000
