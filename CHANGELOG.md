@@ -11,6 +11,9 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ### Fixed
 - Capture now sends again the events that the memory store declined to process in one call (5000 events or 5 MB cap) instead of dropping them silently.
+- A memory of tens of thousands of entries stays usable. The entry cache now holds 200 000 files instead of 20 000, and a settled file is re-hashed at most every 60 s instead of 5 s. Project counts are kept per `entries/` folder and recomputed when that folder changes. Before this fix, a full import (21 500 entries) made each project listing a cold read of about 15 s under the workspace lock. The capture then timed out in a loop, and switching project in the workbench took about 14 s. Measured on that memory: the project list now answers in 0.2 to 0.6 s.
+- Workbench: the knowledge list and the timeline show 100 items at a time, with an « Afficher N de plus » button. Each row shows an excerpt of at most 600 characters, and the detail view keeps the full text. A read that meets a busy memory is retried, up to 4 times. Switching to a project already listed no longer reloads the project list.
+- A link to `http://127.0.0.1:7820/` followed from another site opens the workbench instead of « Requête intersite refusée ». Only a top-level navigation to a page is allowed; the API still refuses every cross-site request.
 
 ## [0.2.0] — 2026-10-17
 

@@ -87,6 +87,15 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(code, 403)
         self.assertEqual(self.server.store.list_projects(), [])
 
+    def test_a_link_from_another_site_opens_the_page_but_never_the_api(self):
+        followed = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+        self.assertEqual(self.request("GET", "/", headers=followed, token=False)[0], 200)
+        for path in ("/api/bootstrap", "/api/projects"):
+            self.assertEqual(self.request("GET", path, headers=followed)[0], 403, path)
+        for headers in ({"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "script"}, {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}):
+            self.assertEqual(self.request("GET", "/app.js", headers=headers, token=False)[0], 403, headers)
+        self.assertEqual(self.request("POST", "/api/projects", {"name": "No"}, followed)[0], 403)
+
     def test_project_review_import_and_handoff_flow(self):
         code, project, _ = self.request("POST", "/api/projects", {"name": "Project", "description": "Human and agent continuity", "folder": str(self.folder)})
         self.assertEqual(code, 201)

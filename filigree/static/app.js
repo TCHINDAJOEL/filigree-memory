@@ -6,8 +6,10 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'
 const kinds = {decision:'Décision',hypothesis:'Hypothèse',observation:'Observation',constraint:'Contrainte',procedure:'Méthode',question:'Question',correction:'Recadrage'};
 const statuses = {proposed:'À examiner',accepted:'Acceptée',rejected:'Écartée',superseded:'Remplacée'};
 const relations = {supports:'appuie',contradicts:'contredit',supersedes:'remplace',relates_to:'est lié à',implements:'met en œuvre'};
+// A captured history holds thousands of entries: lists render a page at a time and rows show a bounded excerpt (the detail keeps the full text).
+const LIST_PAGE=100, EXCERPT=600;
 const views = {overview:'Vue d’ensemble',entries:'Connaissances',timeline:'Chronologie',graph:'Graphe',handoff:'Reprise',activity:'Activité',import:'Importer',capture:'Capture'};
-const state = {token:'',projects:[],project:null,entries:[],events:[],view:'overview',filters:{query:'',kind:'',status:''},handoff:'',request:0,capture:null,liveSig:'',switching:0,target:'',detailId:'',projectSig:'',diagnostics:{entries:[],events:[]},graph:{query:'',status:'',limit:48}};
+const state = {token:'',projects:[],project:null,entries:[],events:[],view:'overview',filters:{query:'',kind:'',status:''},handoff:'',request:0,capture:null,liveSig:'',switching:0,target:'',detailId:'',projectSig:'',diagnostics:{entries:[],events:[]},graph:{query:'',status:'',limit:48},shown:LIST_PAGE};
 // Backend messages that may still arrive in English or as raw technical text are shown in French.
 const knownErrors = [[/^Entry changed|a changé|a été modifiée/i,'Cette connaissance a été modifiée entre-temps.'],[/^Workspace busy/i,'La mémoire est occupée. Réessayez dans quelques instants.'],[/^(Project|Entry) not found/i,'Projet ou connaissance introuvable. Rechargez la page.'],[/^name is required/i,'Le nom du projet est obligatoire.'],[/^Title must be one line/i,'Le titre doit tenir sur une seule ligne.'],[/^A superseded entry cannot be reactivated/i,'Une connaissance remplacée ne peut pas être réactivée : créez une nouvelle proposition.'],[/^Only an accepted entry may supersede/i,'Seule une connaissance acceptée peut en remplacer une autre.'],[/^Target is already superseded/i,'Cette connaissance est déjà remplacée.'],[/^Import exceeds/i,'L’import dépasse 5 Mo. Importez une trace plus petite.'],[/^events must be a list of at most/i,'Un import ne peut pas dépasser 1 000 enregistrements. Découpez la trace.'],[/^Duplicate relation/i,'Ce lien existe déjà.'],[/^An entry cannot reference itself/i,'Une connaissance ne peut pas être reliée à elle-même.'],[/^Relation target does not exist/i,'La connaissance reliée n’existe pas dans ce projet.']];
 const looksTechnical = message => /Traceback|^\w*(Error|Exception)\b|<class |\bNone\b|^[\[{]/.test(message);
@@ -29,11 +31,17 @@ let bootstrapped;
 async function api(path, options={}) {
   if(path!=='/api/bootstrap'&&!state.token&&bootstrapped)await bootstrapped.catch(()=>{});
   const headers = {'Accept':'application/json',...(options.body?{'Content-Type':'application/json'}:{}),...(path!=='/api/bootstrap'?{'X-Filigree-Token':state.token}:{}),...options.headers};
-  let response;
-  try { response=await fetch(path,{...options,headers,body:options.body?JSON.stringify(options.body):undefined}); }
-  catch { throw new Error('Le serveur local ne répond pas. Vérifiez que Filigree est démarré, puis réessayez.'); }
-  const type=response.headers.get('content-type')||'';
-  const data=type.includes('application/json')?await response.json():await response.text();
+  let response,data;
+  // A read that meets a busy memory (another process holds the workspace lock) is retried a few times: it is safe to repeat.
+  const reading=!options.method||String(options.method).toUpperCase()==='GET';
+  for(let attempt=0;;attempt++){
+    try { response=await fetch(path,{...options,headers,body:options.body?JSON.stringify(options.body):undefined}); }
+    catch { throw new Error('Le serveur local ne répond pas. Vérifiez que Filigree est démarré, puis réessayez.'); }
+    const type=response.headers.get('content-type')||'';
+    data=type.includes('application/json')?await response.json():await response.text();
+    if(reading&&response.status===409&&attempt<4&&/^Workspace busy/i.test(String(data&&data.error||'')))await new Promise(done=>setTimeout(done,400*2**attempt));
+    else break;
+  }
   if(!response.ok){const raw=typeof data==='object'&&(data.error||data.message);const failure=new Error(raw?frenchMessage(String(raw),response.status):`La requête a échoué (${response.status}).`);failure.status=response.status;throw failure;}
   return data;
 }
@@ -98,7 +106,8 @@ async function refresh(projectId) {
   const seq=++state.request;
   // An explicit request is recorded before any await, so a background refresh that starts meanwhile cannot pick another project.
   if(projectId)state.target=projectId;
-  const data=await api('/api/projects');state.projects=list(data,'projects');
+  // Switching to a project the list already shows needs no new (costly) project list: the periodic refresh keeps it current.
+  if(!(projectId&&state.projects.some(p=>p.id===projectId))){const data=await api('/api/projects');state.projects=list(data,'projects');}
   // state.target is the last project the user asked for, so a refresh that finishes mid-switch cannot revert it.
   const wanted=projectId||state.target||state.project?.id||localStorage.getItem('filigree.project');
   const project=state.projects.find(p=>p.id===wanted)||state.projects[0]||null;
@@ -107,6 +116,7 @@ async function refresh(projectId) {
   const [details,entries,events]=await Promise.all([api(`/api/projects/${encodeURIComponent(project.id)}`),api(`/api/projects/${encodeURIComponent(project.id)}/entries`),api(`/api/projects/${encodeURIComponent(project.id)}/events`)]);
   if(seq!==state.request)return;
   if(state.project?.id!==(details.project||details).id){state.diagnostics={entries:[],events:[]};paintDiagnostics();}
+  if(state.project?.id!==(details.project||details).id)state.shown=LIST_PAGE;
   state.project=details.project||details;state.entries=list(entries,'entries');state.events=list(events,'events');state.liveSig=liveSignature(state.entries,state.events);localStorage.setItem('filigree.project',state.project.id);state.projectSig=projectSignature(state.projects);shell();render();refreshDetail();loadDiagnostics(state.project.id);
 }
 const projectSignature = projects => JSON.stringify(projects.map(p=>[p.id,p.name,!!p.folder,!!p.demo]));
@@ -121,7 +131,7 @@ function go(view) { if(!views[view])view='overview';state.view=view;location.has
 function intro(title,description,extra='') {return `<div class="page-intro"><div><h1>${escapeHTML(title)}</h1><p>${escapeHTML(description)}</p></div>${extra}</div>`;}
 function empty(title,description,action='') {return `<div class="empty-state"><div class="empty-icon" aria-hidden="true">⌁</div><h2>${escapeHTML(title)}</h2><p>${escapeHTML(description)}</p>${action}</div>`;}
 function row(entry) {
-  return `<article class="knowledge-row"><div class="row-heading"><button class="entry-title" data-entry="${escapeHTML(entry.id)}">${escapeHTML(entry.title)}</button>${badge(entry.status)}</div><p class="entry-excerpt">${escapeHTML(entry.body)}</p><div class="entry-meta"><span class="kind-label">${escapeHTML(kinds[entry.kind]||entry.kind)}</span><span title="Nom déclaré, non authentifié">↳ Déclaré : ${escapeHTML(entry.agent||'Humain')}</span><span>${sourceParts(entry.sources||[]).evidence.length} source${sourceParts(entry.sources||[]).evidence.length>1?'s':''}</span>${(entry.tags||[]).slice(0,3).map(t=>`<span class="tag">${escapeHTML(t)}</span>`).join('')}<span>${escapeHTML(date(entry.updated_at||entry.created_at))}</span></div></article>`;
+  return `<article class="knowledge-row"><div class="row-heading"><button class="entry-title" data-entry="${escapeHTML(entry.id)}">${escapeHTML(entry.title)}</button>${badge(entry.status)}</div><p class="entry-excerpt">${escapeHTML(entry.body.length>EXCERPT?entry.body.slice(0,EXCERPT)+'…':entry.body)}</p><div class="entry-meta"><span class="kind-label">${escapeHTML(kinds[entry.kind]||entry.kind)}</span><span title="Nom déclaré, non authentifié">↳ Déclaré : ${escapeHTML(entry.agent||'Humain')}</span><span>${sourceParts(entry.sources||[]).evidence.length} source${sourceParts(entry.sources||[]).evidence.length>1?'s':''}</span>${(entry.tags||[]).slice(0,3).map(t=>`<span class="tag">${escapeHTML(t)}</span>`).join('')}<span>${escapeHTML(date(entry.updated_at||entry.created_at))}</span></div></article>`;
 }
 function timelineEvents() {return [...state.events].sort((a,b)=>String(b.at||b.created_at||b.timestamp||'').localeCompare(String(a.at||a.created_at||a.timestamp||'')));}
 function eventMarkup(event) {
@@ -144,14 +154,14 @@ function overview() {
 const fold = value => String(value??'').normalize('NFD').replace(/\p{M}/gu,'').toLocaleLowerCase('fr');
 function filteredEntries() {const {query,kind,status}=state.filters;const needle=fold(query).trim();return state.entries.filter(e=>(!kind||e.kind===kind)&&(!status||e.status===status)&&(!needle||fold([e.title,e.body,e.agent,e.episode,...(e.tags||[])].join(' ')).includes(needle)));}
 function entriesView() {return intro('Des idées, avec leur contexte.','Retrouvez une connaissance, examinez ses sources et suivez ses évolutions.')+`<div class="filters"><div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" aria-label="Rechercher dans les connaissances" placeholder="Rechercher une décision, une idée, un mot…" value="${escapeHTML(state.filters.query)}"></div><select id="kind-filter" aria-label="Filtrer par type">${options(kinds,state.filters.kind,'Tous les types')}</select><select id="status-filter" aria-label="Filtrer par statut">${options(statuses,state.filters.status,'Tous les statuts')}</select></div><div id="entries-results">${entryResults()}</div>`;}
-function entryResults() {const filtered=filteredEntries();return `<p class="entry-count" role="status">${filtered.length} connaissance${filtered.length>1?'s':''}</p>${filtered.length?`<div class="knowledge-list">${filtered.map(row).join('')}</div>`:(state.filters.query.trim()||state.filters.kind||state.filters.status)?empty('Aucune connaissance à afficher.','Aucune connaissance ne correspond à ces filtres. Modifiez-les ou réinitialisez-les.','<button class="button secondary" data-action="reset-filters">Réinitialiser les filtres</button>'):empty('Aucune connaissance pour le moment.','Ajoutez une première connaissance, ou importez des traces.','<button class="button primary" data-action="add">Ajouter une connaissance</button>')}`;}
+function entryResults() {const filtered=filteredEntries();return `<p class="entry-count" role="status">${filtered.length} connaissance${filtered.length>1?'s':''}</p>${filtered.length?`<div class="knowledge-list">${filtered.slice(0,state.shown).map(row).join('')}</div>${filtered.length>state.shown?`<button class="button secondary" data-action="entries-more">Afficher ${Math.min(LIST_PAGE,filtered.length-state.shown)} de plus (${filtered.length-state.shown} masquées)</button>`:''}`:(state.filters.query.trim()||state.filters.kind||state.filters.status)?empty('Aucune connaissance à afficher.','Aucune connaissance ne correspond à ces filtres. Modifiez-les ou réinitialisez-les.','<button class="button secondary" data-action="reset-filters">Réinitialiser les filtres</button>'):empty('Aucune connaissance pour le moment.','Ajoutez une première connaissance, ou importez des traces.','<button class="button primary" data-action="add">Ajouter une connaissance</button>')}`;}
 function importView() {return intro('Faites entrer votre histoire.','Importez des notes, une conversation ou des traces structurées. Vous gardez la main sur leur validation.')+`<div class="import-layout"><form id="import-form" class="surface"><div class="upload-zone"><label for="import-file">Choisir un fichier texte, Markdown, JSON ou JSONL</label><input id="import-file" type="file" accept=".txt,.md,.json,.jsonl,.ndjson,text/plain,application/json"></div><label class="form-field">Nom de la source<input name="source" value="Note importée" required placeholder="Ex. Session Claude du 15 octobre"></label><label class="form-field">Texte ou traces<textarea name="text" rows="13" required placeholder="Collez ici votre conversation, vos notes ou une exportation JSON…"></textarea></label><div id="import-error"></div><button class="button primary" type="submit">Importer les traces</button><div id="import-result"></div></form><aside class="import-note"><h3>Une trace n’est pas une décision.</h3><p>Une importation crée des propositions. Relisez-les avant de les accepter comme connaissances actuelles du projet.</p><h3>Des sources préservées</h3><p>Le texte d’origine reste attaché aux connaissances importées pour retrouver le contexte et vérifier les formulations.</p><h3>Avec vos agents</h3><p>Importez les traces disponibles de Claude Code, Codex ou d’un autre assistant. Aucune clé de modèle n’est nécessaire.</p><p>Une conversation décrit ce qui a été exprimé. Elle ne donne pas accès aux pensées internes d’un modèle.</p></aside></div>`;}
 function render() {
   $('#main').setAttribute('aria-busy','false');
   // The capture view is repainted piece by piece: rebuilding it would erase what the user is typing in its forms.
   if(state.view==='capture'&&$('#capture-banner')){paintCapture();return;}
   if(!state.project&&state.view!=='capture'){$('#main').innerHTML=`<div class="welcome">${intro('Chaque projet a une histoire.','Gardez ses décisions, ses détours et ses raisons dans une mémoire que vous pouvez transmettre.')}${empty('Bienvenue dans Filigree.','Créez votre projet ou explorez un exemple : une proposition technique, un recadrage, puis une décision qui conserve le chemin parcouru.','<div class="empty-actions"><button class="button primary" data-action="project">Créer mon premier projet</button><button class="button secondary" data-action="demo">Explorer la démonstration</button></div>')}</div>`;return;}
-  const content={overview,entries:entriesView,timeline:()=>intro('Comprendre le chemin parcouru.','Les idées changent. Retrouvez quand, comment et avec quelles sources.')+`<section class="timeline-full">${timelineEvents().map(eventMarkup).join('')||empty('Le fil commence ici.','Ajoutez une connaissance : chaque évolution sera conservée.')}</section>`,import:importView,capture:captureView};
+  const content={overview,entries:entriesView,timeline:()=>intro('Comprendre le chemin parcouru.','Les idées changent. Retrouvez quand, comment et avec quelles sources.')+`<section class="timeline-full">${timelineEvents().slice(0,state.shown).map(eventMarkup).join('')||empty('Le fil commence ici.','Ajoutez une connaissance : chaque évolution sera conservée.')}</section>${state.events.length>state.shown?`<button class="button secondary" data-action="timeline-more">Afficher ${Math.min(LIST_PAGE,state.events.length-state.shown)} de plus (${state.events.length-state.shown} masqués)</button>`:''}`,import:importView,capture:captureView};
   if(content[state.view]){$('#main').innerHTML=content[state.view]();if(state.view==='capture')loadCapture();return;}
   $('#main').innerHTML=`<div class="loading-state"><span class="spinner"></span>Chargement…</div>`;
   if(state.view==='graph')loadGraph();if(state.view==='handoff')loadHandoff();if(state.view==='activity')loadActivity();
@@ -341,6 +351,8 @@ async function handleAction(event){
   if(target.dataset.edit){$('#detail').close();entryForm(state.entries.find(e=>e.id===target.dataset.edit));return;}
   const action=target.dataset.action;
   if(action==='graph-more'){state.graph.limit+=48;paintGraph();return;}
+  if(action==='timeline-more'){state.shown+=LIST_PAGE;render();return;}
+  if(action==='entries-more'){state.shown+=LIST_PAGE;$('#entries-results').innerHTML=entryResults();return;}
   if(action==='reload-conflict'){await reloadConflict(target);return;}
   if(action==='add-source'){$('#source-editors').insertAdjacentHTML('beforeend',sourceEditor());return;}
   if(action==='add-relation'){$('#relation-editors').insertAdjacentHTML('beforeend',relationEditor({},$('#entry-form [name="id"]').value));return;}
@@ -410,13 +422,13 @@ async function handleSubmit(event){
 document.addEventListener('click',handleAction);
 document.addEventListener('submit',handleSubmit);
 document.addEventListener('input',event=>{
-  if(event.target.id==='search'){state.filters.query=event.target.value;$('#entries-results').innerHTML=entryResults();}
+  if(event.target.id==='search'){state.filters.query=event.target.value;state.shown=LIST_PAGE;$('#entries-results').innerHTML=entryResults();}
   if(event.target.id==='graph-search'){state.graph.query=event.target.value;state.graph.limit=48;paintGraph();}
   if(event.target.closest('#import-form'))$('#import-error').innerHTML='';
 });
 document.addEventListener('change',async event=>{
   if(event.target.id==='graph-status'){state.graph.status=event.target.value;state.graph.limit=48;paintGraph();}
-  if(event.target.id==='kind-filter'||event.target.id==='status-filter'){state.filters[event.target.id==='kind-filter'?'kind':'status']=event.target.value;$('#entries-results').innerHTML=entryResults();}
+  if(event.target.id==='kind-filter'||event.target.id==='status-filter'){state.filters[event.target.id==='kind-filter'?'kind':'status']=event.target.value;state.shown=LIST_PAGE;$('#entries-results').innerHTML=entryResults();}
   if(event.target.id==='project-select'){
     const draft=state.view==='import'&&$('#import-form [name="text"]');
     // Switching rebuilds the import form: never discard typed text without asking, and never move it to another project silently.

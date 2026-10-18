@@ -222,3 +222,32 @@ test('project creation waits for a delayed bootstrap and keeps the new project s
   expect(released).toBe(true);
   expect(created).toEqual([201]);
 });
+
+test('a large captured history renders a page at a time with bounded excerpts', async ({page}) => {
+  const errors=[];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  const name=`Historique volumineux ${Date.now()}`;
+  const project=await apiProject(page, name, makeFolder('volumineux'));
+  await page.evaluate(async id => {
+    const {token} = await (await fetch('/api/bootstrap')).json();
+    const events=Array.from({length: 130}, (_, n) => ({content: `Observation ${n} ` + 'x'.repeat(900), occurrence: n}));
+    await fetch(`/api/projects/${id}/import`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Filigree-Token': token}, body: JSON.stringify({source: 'capture simulée', text: JSON.stringify(events)})});
+  }, project.id);
+  await page.reload();
+  await page.getByLabel('Projet actif').selectOption(project.id);
+  await expect(page.locator('#project-name')).toHaveText(name);
+  await page.locator('[data-view="entries"]').first().click();
+  await expect(page.locator('.entry-count')).toHaveText('130 connaissances');
+  await expect(page.locator('#entries-results .knowledge-row')).toHaveCount(100);
+  const excerpt=await page.locator('#entries-results .entry-excerpt').first().textContent();
+  expect(excerpt.length).toBeLessThanOrEqual(601);
+  expect(excerpt.endsWith('…')).toBe(true);
+  await page.getByRole('button', {name: 'Afficher 30 de plus (30 masquées)'}).click();
+  await expect(page.locator('#entries-results .knowledge-row')).toHaveCount(130);
+  await expect(page.locator('[data-action="entries-more"]')).toHaveCount(0);
+  // A new filter starts again from the first page.
+  await page.getByLabel('Rechercher dans les connaissances').fill('Observation');
+  await expect(page.locator('#entries-results .knowledge-row')).toHaveCount(100);
+  expect(errors).toEqual([]);
+});

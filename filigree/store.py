@@ -360,6 +360,7 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True)
         self._cache: OrderedDict[str, tuple] = OrderedDict()
         self._cache_lock = threading.Lock()
+        self._counts: dict[str, tuple] = {}
         with _LOCKS_LOCK:
             self._lock = _LOCKS.setdefault(str(self.root), _WorkspaceLock(self._path(".filigree.lock")))
         self._path("projects").mkdir(exist_ok=True)
@@ -626,11 +627,32 @@ class Store:
                 project["folder_state"] = "ok" if Path(project["folder"]["path"]).is_dir() else "missing"
             else:
                 project["folder_state"] = "unbound"
-            entries, problems = self._entries_checked(project_id)
-            project["counts"] = {status: sum(entry["status"] == status for entry in entries) for status in sorted(STATUSES)}
-            project["counts"]["total"] = len(entries)
-            project["diagnostics"] = problems
+            counts, problems = self._entry_counts(project_id)
+            project["counts"] = dict(counts)
+            project["diagnostics"] = [dict(problem) for problem in problems]
             return project
+
+    def _entry_counts(self, project_id: str) -> tuple[dict, list]:
+        """Status counts and quarantined files. Listing projects would otherwise parse every entry of every project
+        on each call. Every Filigree write renames a file into entries/, which moves the folder's mtime; an unchanged,
+        settled folder keeps its counts, re-checked at least every CACHE_REVALIDATE_SECONDS (edits made in place)."""
+        directory = self._path(str((self._project_dir(project_id) / ".filigree" / "entries").relative_to(self.root)))
+        try:
+            signature = directory.stat().st_mtime_ns
+        except OSError:
+            signature = None
+        now = time.monotonic()
+        hit = self._counts.get(project_id)
+        if hit and hit[0] == signature and now - hit[1] < self.CACHE_REVALIDATE_SECONDS:
+            return hit[2], hit[3]
+        entries, problems = self._entries_checked(project_id)
+        counts = {status: sum(entry["status"] == status for entry in entries) for status in sorted(STATUSES)}
+        counts["total"] = len(entries)
+        if signature is not None and time.time_ns() - signature > self.CACHE_SETTLE_SECONDS * 1e9:
+            self._counts[project_id] = (signature, now, counts, problems)
+        else:
+            self._counts.pop(project_id, None)
+        return counts, problems
 
     def _validate(self, entry: dict):
         _id(entry["id"])

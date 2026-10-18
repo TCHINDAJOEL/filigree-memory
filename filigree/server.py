@@ -260,7 +260,10 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin.lower() not in {f"http://{host}" for host in hosts}:
             self.send(403, {"error": "Origine non autorisée."})
             return False
-        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+        # A link followed from another site may open the page itself (a top-level navigation only, never the API):
+        # the page holds no secret and fetches its key same-origin. Everything else from another site is refused.
+        navigation = self.command == "GET" and not urlsplit(self.path).path.startswith("/api/") and self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document"
+        if self.headers.get("Sec-Fetch-Site") == "cross-site" and not navigation:
             self.send(403, {"error": "Requête intersite refusée."})
             return False
         if authenticated and not secrets.compare_digest(self.headers.get("X-Filigree-Token", ""), self.server.token):
