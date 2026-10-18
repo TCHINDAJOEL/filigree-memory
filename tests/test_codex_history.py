@@ -58,7 +58,7 @@ class CodexHistoryCase(unittest.TestCase):
 
     def conversation(self):
         return [("userMessage", {"content": [{"type": "text", "text": "Ajoute un test pour le parseur"}]}),
-                ("reasoning", {"summary": ["private"]}),
+                ("reasoning", {"summary": ["RAISONNEMENT CACHE"]}),
                 ("agentMessage", {"text": "Je lis le parseur.", "phase": "commentary"}),
                 ("commandExecution", {"command": "python -m unittest discover -s tests", "status": "completed", "exitCode": 0, "aggregatedOutput": "Ran 3 tests OK", "durationMs": 1200}),
                 ("fileChange", {"changes": [{"path": "C:\\w\\app\\parser.py", "kind": {"type": "update"}, "diff": "SECRET DIFF BODY"}], "status": "completed"}),
@@ -94,7 +94,7 @@ class ImportTests(CodexHistoryCase):
         self.assertIn("rollout_ordinal", text)
         self.assertNotIn("SECRET DIFF BODY", text)  # diffs are never stored
         self.assertNotIn("discover -s tests", text)  # a command keeps its program name only
-        self.assertNotIn("private", text)  # reasoning is excluded
+        self.assertNotIn("RAISONNEMENT CACHE", text)  # reasoning is excluded (a marker no temp path can contain)
         self.assertIn("parser.py (update)", text)
         self.assertEqual(result["ignored_items"], {"reasoning": 1})
 
