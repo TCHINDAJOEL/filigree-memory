@@ -165,6 +165,10 @@ def _names(changes) -> str:
     return ", ".join(shown) + (f" … (+{more})" if more > 0 else "")
 
 
+def _basenames(changes) -> list[str]:
+    return [PurePath(change["path"].replace(chr(92), "/")).name[:80] for change in (changes if isinstance(changes, list) else []) if isinstance(change, dict) and isinstance(change.get("path"), str)]
+
+
 def _message_text(content) -> str:
     parts = [block.get("text") for block in content if isinstance(block, dict) and block.get("type") in {None, "text", "input_text", "output_text"} and isinstance(block.get("text"), str)] if isinstance(content, list) else []
     return "\n".join(tap_source.visible_text(tap_source.repair_text(part)) for part in parts if part).strip()
@@ -229,7 +233,9 @@ def build_drafts(rows) -> tuple[list[dict], dict, int]:
             ignored[item_type + " (vide ou privé)"] = ignored.get(item_type + " (vide ou privé)", 0) + 1
             continue
         kind, tag, seed, body = draft
-        drafts.append({"kind": kind, "tag": tag, "seed": seed, "body": body, "thread": thread_id, "turn": turn_id, "item": item_id, "ordinal": ordinal, "created": created_ms, "type": item_type})
+        drafts.append({"kind": kind, "tag": tag, "seed": seed, "body": body, "thread": thread_id, "turn": turn_id, "item": item_id, "ordinal": ordinal, "created": created_ms, "type": item_type,
+                       "failed": seed.endswith(" · échec"), "test": item_type == "commandExecution" and seed.startswith("Commande · tests"),
+                       "files": _basenames(item.get("changes")) if item_type == "fileChange" else []})
     return drafts, ignored, malformed
 
 
@@ -245,6 +251,10 @@ def event_for(draft: dict, evidence: dict, thread: dict, state_name: str, histor
         title, who = f"Utilisateur · {line}", "Humain via Codex"
     elif kind == "assistant_text":
         title, who = f"Codex · {'plan' if draft['tag'] == 'plan' else 'réponse'} · {line}", "Codex"
+    elif kind == "fiche":
+        title, who = f"Fiche de fil · {line}", "Codex"
+    elif kind == "ticket":
+        title, who = f"Ticket candidat · {line}", "Codex"
     else:
         title, who = f"{line}", "Codex"
     thread_id, uri = draft["thread"], f"codex-thread:{draft['thread']}:{draft['item']}"
@@ -254,10 +264,51 @@ def event_for(draft: dict, evidence: dict, thread: dict, state_name: str, histor
                   "claim": "historique Codex local, non authentifié ; dossier lu dans le fil enregistré par Codex"}
     return PreRedacted({"title": title[:180], "body": text or title, "agent": who, "episode": thread_id[:240], "timestamp": _iso(draft["created"])[:80], "occurrence": f"{thread_id}:{draft['item']}",
                         "sources": [{"label": f"{SOURCE} · {thread_id[:8]} #{draft['ordinal']}", "uri": uri, "excerpt": text[:4000]}],
-                        "tags": ["historique", COLLECTOR, "codex", draft["tag"], "lien-natif"], "provenance": provenance, "pre_redactions": found + more})
+                        "tags": ["historique", COLLECTOR, "codex", draft["tag"], "lien-natif"] if kind in {"fiche", "ticket"} else ["historique", COLLECTOR, "codex", "trace", draft["tag"], "lien-natif"], "provenance": provenance, "pre_redactions": found + more})
 
 
 KEY_PREFIX = 500
+
+
+def _excerpt(text: str, limit: int) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[:limit - 1] + "…"
+
+
+def synthesize(drafts: list[dict]) -> list[dict]:
+    """Deterministic digest of one thread (no model): one episode sheet plus candidate tickets. Both have the same shape
+    as the traces, so they are redacted and proposed like any other event; the traces remain the evidence."""
+    if not drafts:
+        return []
+    users = [d for d in drafts if d["kind"] == "user_text"]
+    answers = [d for d in drafts if d["kind"] == "assistant_text"]
+    commands = [d for d in drafts if d["type"] == "commandExecution"]
+    tests = [d for d in commands if d["test"]]
+    calls = [d for d in drafts if d["type"] == "mcpToolCall"]
+    files = list(dict.fromkeys(name for d in drafts for name in d["files"]))
+    failed_commands = [d for d in commands if d["failed"]]
+    tickets = []
+    if tests and tests[-1]["failed"]:
+        tickets.append(("Tests en échec en fin de fil", "La dernière exécution de tests de ce fil a échoué : vérifier si le problème est résolu."))
+    elif commands and commands[-1]["failed"]:
+        tickets.append(("Dernière commande en échec", "La dernière commande de ce fil a échoué : vérifier si le travail est terminé."))
+    if answers and answers[-1]["body"].rstrip().endswith("?"):
+        tickets.append(("Question ouverte en fin de fil", "Le fil se termine sur une question de Codex : " + _excerpt(answers[-1]["body"], 300)))
+    last = drafts[-1]
+    lines = ["Objectif : " + (_excerpt(users[0]["body"], 400) if users else "(aucun message utilisateur lisible)"),
+             "Résultat : " + (_excerpt(answers[-1]["body"], 500) if answers else "(aucune réponse lisible)"),
+             f"Activité : {len(users)} message(s) utilisateur, {len(answers)} réponse(s), {len(commands)} commande(s) dont {len(failed_commands)} en échec, "
+             f"{len(tests)} exécution(s) de tests dont {sum(d['failed'] for d in tests)} en échec, {len(files)} fichier(s) modifié(s), {len(calls)} appel(s) d'outil."]
+    if files:
+        lines.append("Fichiers modifiés : " + ", ".join(files[:15]) + (f" … (+{len(files) - 15})" if len(files) > 15 else ""))
+    if tickets:
+        lines.append("Points à vérifier : " + " ; ".join(title for title, _ in tickets))
+    lines.append("Fiche calculée sans modèle à partir des traces de ce fil ; chaque trace reste consultable comme preuve.")
+    base = {"thread": last["thread"], "turn": last["turn"], "ordinal": last["ordinal"], "created": last["created"], "type": "synthese", "failed": False, "test": False, "files": []}
+    out = [{**base, "kind": "fiche", "tag": "fiche", "seed": _excerpt(users[0]["body"], 120) if users else "fil Codex", "item": "fiche", "body": "\n".join(lines)}]
+    for number, (title, text) in enumerate(tickets):
+        out.append({**base, "kind": "ticket", "tag": "ticket", "seed": title, "item": f"ticket-{number}", "body": f"{title}\n{text}"})
+    return out
 
 
 def _digest(text: str) -> str:
@@ -390,7 +441,7 @@ def import_history(store, env=None, codex_home=None, dry_run: bool = False, thre
                 if project_id not in known:
                     known[project_id] = set() if dry_run and project_id not in before else _known_texts(store, project_id)
                 events, already = [], 0
-                for draft in drafts:
+                for draft in [*synthesize(drafts), *drafts]:
                     event = event_for(draft, resolution, row, state_db.name, history_db.name)
                     if draft["kind"] in {"user_text", "assistant_text"} and (thread_id, _draft_key(draft)) in known[project_id]:
                         already += 1

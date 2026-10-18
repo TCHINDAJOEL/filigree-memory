@@ -81,11 +81,11 @@ class ImportTests(CodexHistoryCase):
     def test_proven_thread_creates_project_and_sourced_proposals(self):
         self.thread("t-1", EXTENDED + str(self.app))
         result = self.run_import()
-        self.assertEqual((result["threads_imported"], result["events_imported"], result["skipped"]), (1, 5, {}))
+        self.assertEqual((result["threads_imported"], result["events_imported"], result["skipped"]), (1, 6, {}))
         project, = self.projects()
         self.assertEqual(Path(project["folder"]["path"]), self.app)
         entries = self.entries(project["id"])
-        self.assertEqual(len(entries), 5)
+        self.assertEqual(len(entries), 6)
         self.assertTrue(all(entry["status"] == "proposed" and entry["episode"] == "t-1" for entry in entries))
         text = json.dumps(entries, ensure_ascii=False)
         self.assertIn("codex-thread:t-1:t-1-i0", text)
@@ -151,16 +151,16 @@ class ImportTests(CodexHistoryCase):
         self.thread("t-1", str(self.app))
         first = self.run_import()
         second = self.run_import()
-        self.assertEqual((first["events_imported"], second["events_imported"], second["duplicates"]), (5, 0, 5))
+        self.assertEqual((first["events_imported"], second["events_imported"], second["duplicates"]), (6, 0, 6))
         project, = self.projects()
-        self.assertEqual(len(self.entries(project["id"])), 5)
+        self.assertEqual(len(self.entries(project["id"])), 6)
 
     def test_text_already_captured_live_is_not_proposed_again(self):
         project = self.store.create_project("App", "", folder=self.app)
         self.store.import_events(project["id"], [{"title": "x", "body": "Ajoute un test pour le parseur", "agent": "Humain via Codex", "episode": "t-1", "occurrence": "other"}], "claude-tap", internal=True)
         self.thread("t-1", str(self.app))
         result = self.run_import()
-        self.assertEqual((result["already_captured"], result["events_imported"]), (1, 4))
+        self.assertEqual((result["already_captured"], result["events_imported"]), (1, 5))
 
     def test_long_message_captured_live_is_not_proposed_again(self):
         long_text = "mot " * 3000  # beyond the 6000-character clip
@@ -168,7 +168,7 @@ class ImportTests(CodexHistoryCase):
         self.store.import_events(project["id"], [{"title": "x", "body": long_text.strip(), "agent": "Codex", "episode": "t-1", "occurrence": "live"}], "claude-tap", internal=True)
         self.thread("t-1", str(self.app), items=[("agentMessage", {"text": long_text})])
         result = self.run_import()
-        self.assertEqual((result["already_captured"], result["events_imported"]), (1, 0))
+        self.assertEqual((result["already_captured"], result["events_imported"]), (1, 1))
 
     def test_archived_rollout_is_history_not_live(self):
         archived = self.home / "archived_sessions" / "rollout-x.jsonl"
@@ -190,7 +190,7 @@ class ImportTests(CodexHistoryCase):
             return real(store, *args, **kwargs)
         with patch.object(Store, "import_events", flaky), patch.object(codex_history.time, "sleep"):
             result = self.run_import()
-        self.assertEqual((result["events_imported"], "interrupted" in result), (5, False))
+        self.assertEqual((result["events_imported"], "interrupted" in result), (6, False))
 
     def test_store_busy_for_good_reports_progress_without_traceback(self):
         self.thread("t-1", str(self.app))
@@ -198,7 +198,24 @@ class ImportTests(CodexHistoryCase):
             result = self.run_import()
         self.assertIn("interrupted", result)
         self.assertEqual(result["events_imported"], 0)
-        self.assertEqual(self.run_import()["events_imported"], 5)  # a rerun resumes
+        self.assertEqual(self.run_import()["events_imported"], 6)  # a rerun resumes
+
+    def test_thread_gets_a_sheet_and_candidate_tickets_and_traces_are_tagged(self):
+        self.thread("t-1", str(self.app), items=[("userMessage", {"content": [{"type": "text", "text": "Corrige le parseur"}]}),
+                                                  ("commandExecution", {"command": "python -m unittest", "status": "failed", "exitCode": 1, "aggregatedOutput": "FAILED (failures=2)"}),
+                                                  ("agentMessage", {"text": "Veux-tu que je continue ?", "phase": "final_answer"})])
+        result = self.run_import()
+        project, = self.projects()
+        entries = self.entries(project["id"])
+        sheets = [entry for entry in entries if "fiche" in entry["tags"]]
+        tickets = [entry for entry in entries if "ticket" in entry["tags"]]
+        traces = [entry for entry in entries if "trace" in entry["tags"]]
+        self.assertEqual((len(sheets), len(tickets), len(traces), result["events_imported"]), (1, 2, 3, 6))
+        self.assertIn("Objectif : Corrige le parseur", sheets[0]["body"])
+        self.assertIn("Tests en échec en fin de fil", " ".join(entry["title"] for entry in tickets))
+        self.assertIn("Question ouverte", " ".join(entry["title"] for entry in tickets))
+        self.assertTrue(all(entry["status"] == "proposed" for entry in entries))
+        self.assertNotIn("FAILED (failures", sheets[0]["body"])
 
     def test_redaction_happens_before_truncation(self):
         long_text = "a" * 5990 + " " + SECRET + " fin"  # the secret straddles the 6000-character cut
@@ -218,9 +235,9 @@ class ImportTests(CodexHistoryCase):
         result = self.run_import(dry_run=True)
         self.assertEqual(before, self.memory_files())
         self.assertEqual(self.projects(), [])
-        self.assertTrue(result["dry_run"] and result["events"] == 10 and result["events_imported"] == 0)
+        self.assertTrue(result["dry_run"] and result["events"] == 12 and result["events_imported"] == 0)
         self.assertEqual([project["created"] for project in result["projects"]], [True, True])
-        self.assertEqual(self.run_import()["events_imported"], 10)
+        self.assertEqual(self.run_import()["events_imported"], 12)
 
     def test_dry_run_agrees_with_real_run_on_refusals(self):
         self.thread("tmp", tempfile.gettempdir())
@@ -231,9 +248,9 @@ class ImportTests(CodexHistoryCase):
         self.thread("t-1", str(self.app), items=[("agentMessage", {"text": f"message numéro {number}"}) for number in range(30)])
         with patch.object(Store, "IMPORT_MAX_NEW_EVENTS", 7), patch.object(codex_history, "CHUNK", 12):
             result = self.run_import()
-        self.assertEqual((result["events_imported"], result["unprocessed"]), (30, 0))
+        self.assertEqual((result["events_imported"], result["unprocessed"]), (31, 0))
         project, = self.projects()
-        self.assertEqual(len(self.entries(project["id"])), 30)
+        self.assertEqual(len(self.entries(project["id"])), 31)
 
     def test_thread_and_since_filters(self):
         self.thread("old", str(self.app), updated=1_600_000_000)
@@ -267,7 +284,7 @@ class ImportTests(CodexHistoryCase):
         with contextlib.redirect_stdout(out):
             cli.main(["--data-dir", str(self.root / "memory"), "import-codex-history", "--codex-home", str(self.home), "--dry-run"])
         report = json.loads(out.getvalue())
-        self.assertEqual((report["dry_run"], report["events"]), (True, 5))
+        self.assertEqual((report["dry_run"], report["events"]), (True, 6))
         self.assertNotIn("Ajoute un test", out.getvalue())
 
 
