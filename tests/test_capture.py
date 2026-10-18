@@ -476,6 +476,92 @@ class LinkingTests(CaptureCase):
         self.assertTrue(any("Claude Code" in agent for agent in agents) and any("Codex" in agent for agent in agents))
 
 
+class AllowedRootsAndWorktreeTests(CaptureCase):
+    """ADR-0003: allowed roots confine resolution; a proven linked worktree joins its repository's project."""
+
+    def prepare(self, *sessions):
+        self.tap.create()
+        self.tap.add_session("T-old")
+        self.tap.add_record("T-old", claude_record("S-old", "historique ancien"))
+        self.capture.scan_once()
+        for session, client in sessions:
+            self.tap.add_session(session, client)
+
+    def worktree(self, repo, name="wt"):
+        admin = repo / ".git" / "worktrees" / name
+        admin.mkdir(parents=True)
+        tree = self.work / name
+        tree.mkdir()
+        (tree / ".git").write_text(f"gitdir: {admin}\n", encoding="utf-8")
+        (admin / "gitdir").write_text(f"{tree / '.git'}\n", encoding="utf-8")
+        return tree
+
+    def test_session_outside_allowed_roots_stays_pending_without_project(self):
+        self.configure(allowed_roots=[str(self.folder_a)])
+        write_claude_transcript(self.claude_root, "S1", self.folder_a)
+        write_claude_transcript(self.claude_root, "S2", self.folder_b)
+        self.prepare(("T1", "claude"), ("T2", "claude"))
+        self.tap.add_record("T1", claude_record("S1", "dans la racine"))
+        self.tap.add_record("T2", claude_record("S2", "hors racine secret"))
+        self.capture.scan_once()
+        self.assertEqual([Path(item["folder"]["path"]) for item in self.store.list_projects()], [self.folder_a])
+        self.assertEqual({item["key"]: item["reason"] for item in self.capture.pending()}, {"S2": "outside_roots"})
+        self.assertNotIn("hors racine secret", json.dumps(self.capture.pending()))
+
+    def test_outside_roots_wins_over_an_existing_project(self):
+        pid = self.project(self.folder_b)
+        self.configure(allowed_roots=[str(self.folder_a)])
+        write_claude_transcript(self.claude_root, "S1", self.folder_b)
+        self.prepare(("T1", "claude"))
+        self.tap.add_record("T1", claude_record("S1", "projet hors racine"))
+        self.capture.scan_once()
+        self.assertEqual(self.store.list_entries(pid), [])
+        self.assertEqual(self.capture.pending()[0]["reason"], "outside_roots")
+
+    def test_null_allowed_roots_keeps_v01_behaviour(self):
+        self.configure(allowed_roots=None)
+        write_claude_transcript(self.claude_root, "S1", self.folder_b)
+        self.prepare(("T1", "claude"))
+        self.tap.add_record("T1", claude_record("S1", "comportement v0.1"))
+        self.capture.scan_once()
+        self.assertEqual(len(self.store.list_projects()), 1)
+
+    def test_malformed_allowed_roots_disable_capture(self):
+        for bad in ("E:/work", ["relatif/dossier"], [""], [1], ["/a\x00b"]):
+            settings, error = capture_module.normalize_settings({"allowed_roots": bad})
+            self.assertFalse(settings["enabled"], bad)
+            self.assertIn("allowed_roots", error)
+        settings, error = capture_module.normalize_settings({"allowed_roots": [str(self.folder_a)]})
+        self.assertIsNone(error)
+        self.assertEqual(settings["allowed_roots"], [str(self.folder_a)])
+
+    def test_proven_worktree_joins_the_repository_project(self):
+        (self.folder_a / ".git").mkdir()
+        pid = self.project(self.folder_a)
+        tree = self.worktree(self.folder_a)
+        (tree / "src").mkdir()
+        write_claude_transcript(self.claude_root, "S1", tree / "src")
+        self.prepare(("T1", "claude"))
+        self.tap.add_record("T1", claude_record("S1", "depuis le worktree"))
+        self.capture.scan_once()
+        self.assertEqual(len(self.store.list_projects()), 1)
+        entries = self.store.list_entries(pid)
+        self.assertTrue(entries)
+        self.assertEqual(Path(self.provenance(entries[0])["worktree_of"]), self.folder_a)
+
+    def test_unproven_worktree_link_is_not_followed(self):
+        (self.folder_a / ".git").mkdir()
+        pid = self.project(self.folder_a)
+        tree = self.worktree(self.folder_a)
+        (self.folder_a / ".git" / "worktrees" / "wt" / "gitdir").write_text(str(self.folder_b / ".git"), encoding="utf-8")
+        write_claude_transcript(self.claude_root, "S1", tree)
+        self.prepare(("T1", "claude"))
+        self.tap.add_record("T1", claude_record("S1", "lien non prouvé"))
+        self.capture.scan_once()
+        self.assertEqual(self.store.list_entries(pid), [])
+        self.assertEqual(len(self.store.list_projects()), 2)  # v0.1 rule applies: the worktree gets its own project
+
+
 class CursorTests(CaptureCase):
     def setUp(self):
         super().setUp()

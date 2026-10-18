@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import socket
+import re
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
@@ -103,6 +104,50 @@ class DisabledCapture:
         raise CaptureOff()  # any control (start, set_enabled, link, scan...) is refused
 
 
+KEY_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,256}")
+
+
+def agent_key(root) -> str:
+    """<data-dir>/.runtime/agent.key: created once, then reused by every server, MCP and hook of this data folder.
+
+    Owner-only permissions are applied where the OS supports them; any process of the same OS user can still read it."""
+    path = Path(root) / ".runtime" / "agent.key"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        # Written in full under a private name, then linked into place: a concurrent reader never sees a partial key,
+        # and os.link refuses to replace a key another process published first.
+        temporary = path.with_name(f"agent.key.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+            handle.write(secrets.token_urlsafe(32))
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+        except OSError:  # no hard links on this filesystem: exclusive rename is not portable, so create exclusively
+            try:
+                with open(path, "x", encoding="ascii") as handle:
+                    handle.write(temporary.read_text(encoding="ascii"))
+            except FileExistsError:
+                pass
+        finally:
+            temporary.unlink(missing_ok=True)
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    key = ""
+    for _ in range(20):  # a key being written by the fallback path is complete within milliseconds
+        key = path.read_text(encoding="ascii", errors="replace").strip()
+        if KEY_PATTERN.fullmatch(key):
+            break
+        time.sleep(0.05)
+    if not KEY_PATTERN.fullmatch(key):
+        raise ValueError(f"Clé locale illisible ou corrompue : supprimez {path} puis relancez Filigree (une nouvelle clé sera créée).")
+    return key
+
+
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     # The default backlog (5) makes Windows reset connections when a page load and its polling open several at once.
@@ -120,7 +165,7 @@ class LocalServer(ThreadingHTTPServer):
             self.capture = Capture(store, env)  # not started here: serve() decides
         else:
             self.capture = DisabledCapture(store)
-        self.token = secrets.token_urlsafe(32)
+        self.token = agent_key(store.root)
         super().__init__(address, Handler)
 
     def server_bind(self):
@@ -130,7 +175,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Filigree/0.1"
+    server_version = "Filigree"
 
     body_consumed = False
 
@@ -205,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Un objet JSON est requis.")
         return value
 
-    def allowed(self, mutation=False):
+    def allowed(self, authenticated=False):
         port = self.server.server_address[1]
         hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         if (self.headers.get("Host") or "").lower() not in hosts:
@@ -215,17 +260,22 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin.lower() not in {f"http://{host}" for host in hosts}:
             self.send(403, {"error": "Origine non autorisée."})
             return False
-        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+        # A link followed from another site may open the page itself (a top-level navigation only, never the API):
+        # the page holds no secret and fetches its key same-origin. Everything else from another site is refused.
+        navigation = self.command == "GET" and not urlsplit(self.path).path.startswith("/api/") and self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document"
+        if self.headers.get("Sec-Fetch-Site") == "cross-site" and not navigation:
             self.send(403, {"error": "Requête intersite refusée."})
             return False
-        if mutation and not secrets.compare_digest(self.headers.get("X-Filigree-Token", ""), self.server.token):
+        if authenticated and not secrets.compare_digest(self.headers.get("X-Filigree-Token", ""), self.server.token):
             self.send(403, {"error": "Jeton de session absent ou périmé. Rechargez la page."})
             return False
         return True
 
     def dispatch(self, method):
         self.connection.settimeout(15)
-        if not self.allowed(method != "GET"):
+        path = urlsplit(self.path).path
+        # Every API route needs the local key, reads included (ADR-0003); only the bootstrap hands it to the same-origin page.
+        if not self.allowed(method != "GET" or (path.startswith("/api/") and path != "/api/bootstrap")):
             return
         try:
             url = urlsplit(self.path)
@@ -238,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
                 mime = {"index.html": "text/html", "app.js": "text/javascript", "styles.css": "text/css"}[name]
                 return self.send(200, (STATIC / name).read_bytes(), mime + "; charset=utf-8")
             if parts == ["api", "bootstrap"] and method == "GET":
-                return self.send(200, {"projects": store.list_projects(), "token": self.server.token, "version": __version__})
+                return self.send(200, {"token": self.server.token, "version": __version__})
             if parts == ["api", "demo"] and method == "POST":
                 return self.send(201, seed_demo(store))
             if parts == ["api", "capture"]:
@@ -259,6 +309,8 @@ class Handler(BaseHTTPRequestHandler):
                 tail = parts[3:]
                 if not tail and method == "GET":
                     return self.send(200, project)
+                if tail == ["activity"] and method == "GET":
+                    return self.send(200, project_activity(store, pid, query.get("limit", "200")))
                 if not tail and method == "PATCH":
                     if set(data) != {"folder"} or not isinstance(data["folder"], str):
                         raise ValueError("Seul le champ folder (chemin absolu) peut être rattaché.")
@@ -359,7 +411,24 @@ class Handler(BaseHTTPRequestHandler):
     do_PUT = do_DELETE = do_OPTIONS = do_HEAD = refuse
 
 
+def project_activity(store, project_id: str, limit="200") -> dict:
+    """Unreviewed journal view of one project: recent events, sessions, active sessions and overlapping edits."""
+    from .activity import ActivityLog, journal_path
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        raise ValueError("limit doit être un entier entre 1 et 1000.") from None
+    log = ActivityLog(journal_path(store, project_id))
+    return {"note": "Données d'activité non revues, extraites automatiquement : ce sont des indices, pas des connaissances acceptées.",
+            "stats": log.stats(), "events": log.events(limit=limit), "sessions": log.sessions()[:100], "active": log.sessions(active_minutes=15), "overlaps": log.overlaps()}
+
+
 def serve(root, port=7820, capture=True, env=None):
+    from .agent import running_agent
+    existing = running_agent(root)
+    if existing is not None:
+        print(f"Un agent Filigree sert déjà ce dossier de données : {existing['url']}", flush=True)
+        return
     try:
         server = LocalServer(("127.0.0.1", port), Store(Path(root)), capture_enabled=capture, env=env)
     except OSError as exc:

@@ -3,7 +3,9 @@ const path = require('path');
 const { defineConfig } = require('@playwright/test');
 // Every run gets its own fresh synthetic tree; earlier runs are left untouched (nothing is deleted).
 const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '')}-${process.pid}`;
-const base = path.resolve('.runtime', 'browser-runs', runId);
+// Workers re-evaluate this file: they inherit the run folder chosen by the main process.
+const base = process.env.FILIGREE_BROWSER_BASE || path.resolve('.runtime', 'browser-runs', runId);
+process.env.FILIGREE_BROWSER_BASE = base;
 // Fixture project folders are real directories outside the memory root.
 const projects = path.join(base, 'projects');
 fs.mkdirSync(projects, {recursive: true});
@@ -14,6 +16,7 @@ const absentTap = path.join(base, 'absent-tap', 'traces.sqlite3');
 const isolatedRoots = path.join(base, 'sources');
 for (const name of ['claude', 'codex']) fs.mkdirSync(path.join(isolatedRoots, name), {recursive: true});
 const memory = path.join(base, 'memory');
+process.env.FILIGREE_BROWSER_MEMORY = memory;
 fs.mkdirSync(path.join(memory, '.capture'), {recursive: true});
 fs.writeFileSync(path.join(memory, '.capture', 'capture.json'), JSON.stringify({
   tap: {enabled: true, db: absentTap},

@@ -1,6 +1,7 @@
 """Install the built wheel in an isolated environment and serve its packaged UI."""
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from urllib.request import urlopen
@@ -12,7 +13,8 @@ def main():
     wheels = sorted((root / ".runtime/wheels").glob("filigree_memory-*.whl"), key=lambda path: path.stat().st_mtime_ns)
     assert wheels, "no wheel: run `python -m pip wheel . --no-deps --wheel-dir .runtime/wheels` first"
     wheel = wheels[-1]
-    sources = [*(root / "filigree").glob("*.py"), *(root / "filigree/static").glob("*"), root / "pyproject.toml"]
+    version = re.search(r'^version = "([^"]+)"', (root / "pyproject.toml").read_text(encoding="utf-8"), re.M).group(1)
+    sources = [*(root / "filigree").rglob("*.py"), *(root / "filigree/static").glob("*"), root / "pyproject.toml"]
     stale = [path.name for path in sources if path.is_file() and path.stat().st_mtime_ns > wheel.stat().st_mtime_ns]
     assert not stale, f"the newest wheel predates {stale}: rebuild it before verifying"
     with tempfile.TemporaryDirectory() as folder:
@@ -22,7 +24,9 @@ def main():
         python = environment / ("Scripts/python.exe" if (environment / "Scripts").exists() else "bin/python")
         subprocess.run([str(python), "-m", "pip", "install", "--no-deps", str(wheel)], cwd=temporary, check=True)
         result = subprocess.run([str(python), "-m", "filigree", "--version"], cwd=temporary, capture_output=True, text=True, check=True)
-        assert result.stdout.strip() == "0.1.0", result.stdout
+        assert result.stdout.strip() == version, result.stdout
+        modules = subprocess.run([str(python), "-c", "import filigree.collectors, filigree.agent, filigree.activity, filigree.distill, filigree.hooks, filigree.service, filigree.chat_export; print('ok')"], cwd=temporary, capture_output=True, text=True)
+        assert modules.stdout.strip() == "ok", "packaged wheel misses v0.2 modules: " + modules.stderr[-500:]
         server = subprocess.Popen([str(python), "-m", "filigree", "--data-dir", str(temporary / "memory"), "serve", "--port", "0", "--no-capture"], cwd=temporary, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             line = server.stdout.readline()
@@ -37,8 +41,8 @@ def main():
             capture = subprocess.run([str(python), "-c", "import filigree.capture as c, inspect; print('hold-fallback' in inspect.getsource(c))"], cwd=temporary, capture_output=True, text=True, check=True)
             assert capture.stdout.strip() == "True", "packaged capture predates the fallback-only hold"
             with urlopen(url + "/api/bootstrap", timeout=10) as response:
-                assert json.load(response)["version"] == "0.1.0"
-            print("PASS: isolated wheel install, CLI version, packaged HTML/JS, local bootstrap")
+                assert json.load(response)["version"] == version
+            print(f"PASS: isolated wheel install, CLI version {version}, v0.2 modules, packaged HTML/JS, local bootstrap")
         finally:
             server.terminate()
             server.wait(timeout=10)

@@ -233,7 +233,7 @@ class MCPRemediationTests(unittest.TestCase):
 
     def test_there_is_no_approval_tool(self):
         names = {tool["name"] for tool in mcp.TOOLS}
-        self.assertEqual(names, {"list_projects", "project_for_folder", "search_memory", "get_handoff", "propose_memory"})
+        self.assertEqual(names, {"list_projects", "project_for_folder", "search_memory", "get_handoff", "propose_memory", "project_activity", "active_sessions"})
         self.assertTrue(self.tool("accept_memory", {"project_id": self.project})["error"])
 
     def test_tool_errors_are_plain_text_not_reprs_or_internals(self):
@@ -327,7 +327,7 @@ class CLIRemediationTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "project_for_folder", "arguments": {"folder": str(folder)}}},
         ]
         raw = "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines).encode("utf-8")
-        result = self.run_cli("--data-dir", str(memory), "mcp", input_bytes=raw)
+        result = self.run_cli("--data-dir", str(memory), "mcp", "--project-folder", str(folder), input_bytes=raw)  # MCP is scoped to one project
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(b"\r\n", result.stdout)
         replies = [json.loads(line) for line in result.stdout.decode("utf-8").splitlines()]
@@ -435,12 +435,12 @@ class SubprocessServerTests(unittest.TestCase):
         port = self.wait_port(process)
         _, bootstrap = self.call(port, "GET", "/api/bootstrap")
         token = bootstrap["token"]
-        self.assertEqual(self.call(port, "GET", "/api/capture")[1]["tap"]["capability"], "disabled")
+        self.assertEqual(self.call(port, "GET", "/api/capture", token=token)[1]["tap"]["capability"], "disabled")
         for action in ("enable", "start", "scan", "fallback-on"):
             code, value = self.call(port, "POST", "/api/capture", {"action": action}, token)
             self.assertEqual(code, 409, action)
         time.sleep(1.0)
-        self.assertEqual(self.call(port, "GET", "/api/projects")[1], [])
+        self.assertEqual(self.call(port, "GET", "/api/projects", token=token)[1], [])
         self.assertFalse((self.base / "memory" / ".capture").exists())
         self.assertFalse((self.base / "absent-tap").exists())
 
@@ -452,7 +452,8 @@ class SubprocessServerTests(unittest.TestCase):
         self.assertEqual(second.returncode, 1)
         self.assertIn("Impossible d'écouter", err.decode("utf-8"))
         self.assertNotIn(b"Traceback", err)
-        self.assertEqual(self.call(port, "GET", "/api/capture")[0], 200)  # the first server still owns the port
+        token = self.call(port, "GET", "/api/bootstrap")[1]["token"]
+        self.assertEqual(self.call(port, "GET", "/api/capture", token=token)[0], 200)  # the first server still owns the port
 
 
 if __name__ == "__main__":

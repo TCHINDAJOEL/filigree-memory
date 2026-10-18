@@ -50,14 +50,51 @@ class HTTPTests(unittest.TestCase):
         self.assertIn(b"Filigree", body)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         code, value, _ = self.request("GET", "/api/bootstrap")
-        self.assertEqual(value["projects"], [])
+        self.assertNotIn("projects", value)  # nothing private before the key
         self.assertTrue(value["token"])
+
+    def test_every_api_read_requires_the_local_key(self):
+        for path in ("/api/projects", "/api/capture"):
+            code, value, _ = self.request("GET", path, token=False)
+            self.assertEqual(code, 403, path)
+            self.assertNotIn("projects", value)
+            code, _, _ = self.request("GET", path)
+            self.assertEqual(code, 200, path)
+        code, _, _ = self.request("GET", "/", token=False)
+        self.assertEqual(code, 200)
+
+    def test_local_key_is_persistent_and_shared_by_servers_of_one_data_folder(self):
+        key_file = self.server.store.root / ".runtime" / "agent.key"
+        self.assertEqual(key_file.read_text(encoding="ascii").strip(), self.server.token)
+        self.assertGreaterEqual(len(self.server.token), 43)
+        other = LocalServer(("127.0.0.1", 0), Store(self.server.store.root))
+        self.addCleanup(other.server_close)
+        self.assertEqual(other.token, self.server.token)
+        if os.name != "nt":
+            self.assertEqual(key_file.stat().st_mode & 0o077, 0)
+
+    def test_corrupt_local_key_is_refused_not_replaced(self):
+        root = Path(self.temp.name) / "other"
+        (root / ".runtime").mkdir(parents=True)
+        (root / ".runtime" / "agent.key").write_text("court", encoding="ascii")
+        with self.assertRaises(ValueError):
+            LocalServer(("127.0.0.1", 0), Store(root))
+        self.assertEqual((root / ".runtime" / "agent.key").read_text(encoding="ascii"), "court")
 
     def test_dns_rebinding_cross_origin_and_missing_token_are_rejected(self):
         for headers, token in (({"Host": "evil.example"}, True), ({"Origin": "https://evil.example"}, True), ({"Sec-Fetch-Site": "cross-site"}, True), ({}, False)):
             code, _, _ = self.request("POST", "/api/projects", {"name": "No"}, headers, token)
             self.assertEqual(code, 403)
         self.assertEqual(self.server.store.list_projects(), [])
+
+    def test_a_link_from_another_site_opens_the_page_but_never_the_api(self):
+        followed = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+        self.assertEqual(self.request("GET", "/", headers=followed, token=False)[0], 200)
+        for path in ("/api/bootstrap", "/api/projects"):
+            self.assertEqual(self.request("GET", path, headers=followed)[0], 403, path)
+        for headers in ({"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "script"}, {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}):
+            self.assertEqual(self.request("GET", "/app.js", headers=headers, token=False)[0], 403, headers)
+        self.assertEqual(self.request("POST", "/api/projects", {"name": "No"}, followed)[0], 403)
 
     def test_project_review_import_and_handoff_flow(self):
         code, project, _ = self.request("POST", "/api/projects", {"name": "Project", "description": "Human and agent continuity", "folder": str(self.folder)})

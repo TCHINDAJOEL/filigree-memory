@@ -76,7 +76,7 @@ class AdapterTests(unittest.TestCase):
         responses = [json.loads(line) for line in out.getvalue().splitlines()]
         self.assertEqual(len(responses), 4)
         self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-11-25")
-        self.assertEqual(len(responses[1]["result"]["tools"]), 5)
+        self.assertEqual(len(responses[1]["result"]["tools"]), 7)  # five v0.1 tools + two read-only activity tools
         self.assertFalse(responses[2]["result"]["isError"])
         self.assertEqual(responses[3]["error"]["code"], -32602)
 

@@ -4,14 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "filigree-memory"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local living memory of how and why your project evolved."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "Filigree contributors"}]
-keywords = ["knowledge", "memory", "mcp", "agents", "documentation"]
+keywords = ["knowledge", "memory", "mcp", "agents", "documentation", "claude-code", "codex"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Web Environment",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Documentation",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/TCHINDAJOEL/filigree-memory"
+Issues = "https://github.com/TCHINDAJOEL/filigree-memory/issues"
+Changelog = "https://github.com/TCHINDAJOEL/filigree-memory/blob/main/CHANGELOG.md"
 
 [project.scripts]
 filigree = "filigree.cli:main"

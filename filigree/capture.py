@@ -26,7 +26,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from . import native_index, tap_source
+from . import native_index, resolver, tap_source
 from .store import ConflictError, PreRedacted, redact_whole
 
 CAPTURE_DIR = ".capture"
@@ -37,6 +37,13 @@ MAX_NOTICES = 30
 MAX_TAP_SEEN = 5000
 MAX_LEDGER_ITEMS = 400
 DEDUP_WINDOW = 900
+# While an explicit `filigree backfill` replay runs (state["backfill"]), tap and native copies of the same history
+# are met hours apart and in long runs, so the cross-channel ledgers are widened until the replay ends.
+BACKFILL_DEDUP_WINDOW = 7 * 86400
+BACKFILL_LEDGER_ITEMS = 10**9  # effectively uncapped during a replay; shrunk when it ends
+BACKFILL_MAX_SESSIONS = 10**6
+BACKFILL_MAX_STALLED = 5000  # a replay meets every unresolvable old transcript at once
+BACKFILL_MAX_AGE = 7 * 86400  # a replay that cannot finish (unreachable source) is closed after this long
 MAX_QUARANTINES = 5
 FALLBACK_GRACE = 20.0
 FALLBACK_MAX_WAIT = 60.0
@@ -70,7 +77,7 @@ def _utc() -> str:
 
 
 def default_settings() -> dict:
-    return {"enabled": True, "auto_create": True, "paused_all": False, "tap": {"enabled": True, "db": None}, "sources": {"native_index": True, "native_fallback": True}, "roots": {"claude": None, "codex": None}, "exclude": [], "paused": []}
+    return {"enabled": True, "auto_create": True, "paused_all": False, "tap": {"enabled": True, "db": None}, "sources": {"native_index": True, "native_fallback": True}, "roots": {"claude": None, "codex": None}, "exclude": [], "paused": [], "allowed_roots": None, "activity": {"enabled": True, "retention_days": 90, "turn_proposals": True}}
 
 
 def normalize_settings(raw):
@@ -101,6 +108,23 @@ def normalize_settings(raw):
                 if not isinstance(raw[key], list) or len(raw[key]) > 200 or any(not isinstance(item, str) or not item or "\x00" in item for item in raw[key]):
                     raise ValueError(key)
                 settings[key] = list(dict.fromkeys(raw[key]))
+        if raw.get("allowed_roots") is not None:
+            roots = raw["allowed_roots"]
+            # null keeps the v0.1 behaviour; a list confines resolution and project creation to those folders (ADR-0003)
+            if not isinstance(roots, list) or len(roots) > 200 or any(not isinstance(item, str) or not item or "\x00" in item or not Path(item).is_absolute() for item in roots):
+                raise ValueError("allowed_roots")
+            settings["allowed_roots"] = list(dict.fromkeys(roots))
+        if "activity" in raw:
+            section = raw["activity"]
+            if not isinstance(section, dict):
+                raise ValueError("activity")
+            for key, value in section.items():
+                if key in {"enabled", "turn_proposals"} and type(value) is bool:
+                    settings["activity"][key] = value
+                elif key == "retention_days" and type(value) is int and 1 <= value <= 3650:
+                    settings["activity"][key] = value
+                else:
+                    raise ValueError(f"activity.{key}")
         return settings, None
     except ValueError as exc:
         settings["enabled"] = False
@@ -276,6 +300,19 @@ def _clock() -> int:
     return int(time.time())
 
 
+def _epoch(stamp) -> float:
+    """Seconds since the epoch for an ISO timestamp written by the store; an unreadable one counts as the far future."""
+    try:
+        return datetime.fromisoformat(stamp).timestamp()
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _ledger_limits(state) -> tuple:
+    """(window, per-session cap, sessions) of the cross-channel ledgers: widened only while an explicit backfill replays."""
+    return (BACKFILL_DEDUP_WINDOW, BACKFILL_LEDGER_ITEMS, BACKFILL_MAX_SESSIONS) if state.get("backfill") else (DEDUP_WINDOW, MAX_LEDGER_ITEMS, MAX_TAP_SEEN)
+
+
 # Cross-channel ledgers: a bounded, expiring multiset of content digests per native session. A visible
 # item captured through one channel (claude-tap or the native transcript) consumes one matching digest
 # when the other channel meets it, so switching channels never duplicates a message, while an identical
@@ -290,7 +327,7 @@ def _item_digest(item):
     return hashlib.sha256(f"{kind}\n{item.get('name', '')}\n{item.get('text', '').strip()}".encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
-def _clean_ledger(value) -> dict:
+def _clean_ledger(value, cap: int = MAX_LEDGER_ITEMS) -> dict:
     if not isinstance(value, dict):
         return {}
     clean = {}
@@ -298,24 +335,24 @@ def _clean_ledger(value) -> dict:
         if isinstance(native, str) and isinstance(entries, list):
             kept = [[entry[0], entry[1]] for entry in entries if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str) and type(entry[1]) is int]
             if kept:
-                clean[native] = kept[-MAX_LEDGER_ITEMS:]
+                clean[native] = kept[-cap:]
     return clean
 
 
-def _ledger_add(ledger: dict, native: str, digest: str, now: int):
+def _ledger_add(ledger: dict, native: str, digest: str, now: int, cap: int = MAX_LEDGER_ITEMS, sessions: int = MAX_TAP_SEEN):
     entries = ledger.setdefault(native, [])
     entries.append([digest, now])
-    del entries[:-MAX_LEDGER_ITEMS]
-    if len(ledger) > MAX_TAP_SEEN:
-        for stale in sorted(ledger, key=lambda name: ledger[name][-1][1])[:len(ledger) - MAX_TAP_SEEN]:
+    del entries[:-cap]
+    if len(ledger) > sessions:
+        for stale in sorted(ledger, key=lambda name: ledger[name][-1][1])[:len(ledger) - sessions]:
             del ledger[stale]
 
 
-def _ledger_take(ledger: dict, native: str, digest: str, now: int) -> bool:
+def _ledger_take(ledger: dict, native: str, digest: str, now: int, window: int = DEDUP_WINDOW) -> bool:
     entries = ledger.get(native)
     if not entries:
         return False
-    entries[:] = [entry for entry in entries if entry[1] >= now - DEDUP_WINDOW]
+    entries[:] = [entry for entry in entries if entry[1] >= now - window]
     for position, entry in enumerate(entries):
         if entry[0] == digest:
             del entries[position]
@@ -335,6 +372,7 @@ class _Context:
         self.resolved = {}
         self.refreshed = set()
         self.events = {}
+        self.twins = {}
         self.excluded = [Path(item) for item in settings["exclude"]]
         self.paused = set(settings["paused"])
 
@@ -403,7 +441,7 @@ class Capture:
         return active
 
     def _fresh_state(self) -> dict:
-        return {"version": 1, "tap": {"db_key": None, "cursors": {}, "baseline": {}, "recent": {}, "updated": {}, "deleted": []}, "fallback": {"baselined": False, "files": {}, "waits": {}, "stalled": {}, "tap_seen": {}, "native_seen": {}}, "hold": False, "fallback_hold": False, "counters": {}, "skipped": {}, "malformed": {}, "notices": [], "last_scan": None}
+        return {"version": 1, "tap": {"db_key": None, "cursors": {}, "baseline": {}, "recent": {}, "updated": {}, "deleted": []}, "fallback": {"baselined": False, "files": {}, "waits": {}, "stalled": {}, "tap_seen": {}, "native_seen": {}}, "hold": False, "fallback_hold": False, "backfill": {}, "counters": {}, "skipped": {}, "malformed": {}, "notices": [], "last_scan": None}
 
     def _load_state(self, notices=None) -> dict:
         state = self._fresh_state()
@@ -428,7 +466,8 @@ class Capture:
                 elif key != "last_scan" and isinstance(item, type(state[key])):
                     state[key] = item
         fallback = state["fallback"]
-        fallback["tap_seen"], fallback["native_seen"] = _clean_ledger(fallback.get("tap_seen")), _clean_ledger(fallback.get("native_seen"))
+        cap = _ledger_limits(state)[1]
+        fallback["tap_seen"], fallback["native_seen"] = _clean_ledger(fallback.get("tap_seen"), cap), _clean_ledger(fallback.get("native_seen"), cap)
         for name in ("files", "waits", "stalled"):
             if not isinstance(fallback.get(name), dict):
                 fallback[name] = {}
@@ -533,6 +572,22 @@ class Capture:
             kept = [p for p in settings["exclude"] if os.path.normcase(p) != os.path.normcase(path)]
             settings["exclude"] = kept + ([path] if excluded else [])
         self._update(change)
+
+    def set_allowed_roots(self, roots):
+        """None keeps the v0.1 behaviour; a list of existing absolute folders confines resolution and creation."""
+        if roots is not None:
+            clean = []
+            for root in roots:
+                path = Path(root).expanduser()
+                if not path.is_absolute() or not path.is_dir():
+                    raise ValueError(f"Racine autorisée invalide (dossier absolu existant attendu) : {root}")
+                clean.append(str(path.resolve()))
+            roots = list(dict.fromkeys(clean))
+
+        def change(settings):
+            settings["allowed_roots"] = roots
+        self._update(change)
+        return roots
 
     def set_native_fallback(self, enabled: bool):
         self._update(lambda s: s["sources"].update(native_fallback=bool(enabled)))
@@ -699,6 +754,9 @@ class Capture:
         root = next((candidate for candidate in resolved if all(candidate == other or candidate in other.parents for other in resolved)), None)
         if root is None:
             return {"status": "ambiguous_cwd"}
+        roots = ctx.settings["allowed_roots"]
+        if roots is not None and not resolver.under_roots(root, roots):
+            return {"status": "outside_roots"}  # key only: no folder, no text, no project
         evidence = {"native_source": matches[0]["source"], "native_file": Path(matches[0]["file"]).name, "cwd": str(root)}
         if self._is_excluded(ctx, root):
             return {"status": "excluded", **evidence}
@@ -707,6 +765,10 @@ class Capture:
             project = self.store.locate_project(str(path))
             if project and project.get("folder") and _is_generic(project["folder"]["path"], self.env):
                 project = None  # a project bound to a shared location (temp, users, system) must not absorb what lies below it
+            if project is None:
+                project = self._worktree_project(path, ctx.settings["allowed_roots"])
+                if project is not None:
+                    evidence["worktree_of"] = project["folder"]["path"]
             projects.append(project["id"] if project else None)
         if any(projects):
             if len(set(projects)) != 1:
@@ -741,6 +803,19 @@ class Capture:
             return {"status": "cwd_refused", **evidence}
         ctx.projects[project["id"]] = project
         return {"status": "ok", "project_id": project["id"], **evidence}
+
+    def _worktree_project(self, path: Path, roots=None):
+        """Project registered exactly at the main repository of a proven linked worktree, else None."""
+        git = _git_root(path)
+        main = resolver.proven_worktree_main(git) if git is not None else None
+        if main is None or _is_generic(main, self.env) or (roots is not None and not resolver.under_roots(main, roots)):
+            return None
+        project = self.store.locate_project(str(main))
+        if not project or not project.get("folder"):
+            return None
+        if os.path.normcase(str(Path(_plain_path(project["folder"]["path"])))) != os.path.normcase(str(Path(_plain_path(str(main.resolve()))))):
+            return None  # only the repository's own project, never an ancestor that happens to contain it
+        return project
 
     def _link(self, ctx, session_id: str, ids: set) -> dict:
         values = {value for _, value in ids}
@@ -810,7 +885,7 @@ class Capture:
         agent = tap_source.agent_label(kinds, client)
         slug = "codex" if agent == "Codex" else "claude-code"
         evidence = outcome.get("evidence", {})
-        provenance = {"collector": "claude-tap", "tap_db_key": db_key, "tap_session_id": session_id, "record_index": index, "payload_sha256": digest, "native_id": outcome.get("native_id"), "link": outcome["mode"], "native_source": evidence.get("native_source"), "native_file": evidence.get("native_file"), "cwd": evidence.get("cwd"), "claim": "identifiants déclaratifs, non authentifiés"}
+        provenance = {"collector": "claude-tap", "tap_db_key": db_key, "tap_session_id": session_id, "record_index": index, "payload_sha256": digest, "native_id": outcome.get("native_id"), "link": outcome["mode"], "native_source": evidence.get("native_source"), "native_file": evidence.get("native_file"), "cwd": evidence.get("cwd"), **({"worktree_of": evidence["worktree_of"]} if evidence.get("worktree_of") else {}), "claim": "identifiants déclaratifs, non authentifiés"}
         if outcome["mode"] == "explicit":
             # The folder is where the user chose to file this session; it is not evidence from a native transcript.
             provenance.update(target_folder=outcome.get("target_folder"), target_basis="dossier du projet choisi explicitement par l'utilisateur ; aucune preuve de dossier natif")
@@ -841,34 +916,108 @@ class Capture:
         return events
 
     def _flush(self, state, ctx):
+        if not ctx.settings["activity"]["turn_proposals"]:
+            # Per-turn proposals are off (ADR-0003): only the activity journal and session sheets remain.
+            dropped = sum(len(events) for events in ctx.events.values())
+            if dropped:
+                self._count(state, "turn_proposals_off", dropped, bucket="skipped")
+            ctx.events.clear()
+            return
         for project_id, events in list(ctx.events.items()):
+            if state.get("backfill"):
+                events = self._without_twins(state, ctx, project_id, events)
             for start in range(0, len(events), 500):
                 chunk = events[start:start + 500]
-                try:
-                    result = self.store.import_events(project_id, chunk, "claude-tap", internal=True)
-                except (ConflictError, OSError, TimeoutError) as exc:
-                    raise _Transient(type(exc).__name__) from exc
-                except (ValueError, KeyError):
-                    result = {"imported": 0, "duplicates": 0, "redactions": 0}
-                    refusals = []
-                    for event in chunk:
-                        try:
-                            single = self.store.import_events(project_id, [event], "claude-tap", internal=True)
-                            result["imported"] += single["imported"]
-                            result["duplicates"] += single["duplicates"]
-                            result["redactions"] += single.get("redactions", 0)
-                        except ConflictError as exc:
-                            raise _Transient(type(exc).__name__) from exc
-                        except (ValueError, KeyError) as exc:
-                            self._count(state, "rejected")
-                            refusals.append(str(exc)[:120])
-                    if refusals:  # reasons only, never the refused content
-                        self._notice(state, "event_rejected", f"{len(refusals)} événement(s) refusé(s) par la mémoire : {refusals[0]}")
-                self._count(state, "imported", result["imported"])
-                self._count(state, "duplicates", result["duplicates"])
-                if result.get("redactions"):
-                    self._count(state, "redactions", result["redactions"])
+                while chunk:
+                    try:
+                        result = self.store.import_events(project_id, chunk, "claude-tap", internal=True)
+                    except (ConflictError, OSError, TimeoutError) as exc:
+                        raise _Transient(type(exc).__name__) from exc
+                    except (ValueError, KeyError):
+                        result = {"imported": 0, "duplicates": 0, "redactions": 0, "remaining": 0}
+                        refusals = []
+                        for event in chunk:
+                            try:
+                                single = self.store.import_events(project_id, [event], "claude-tap", internal=True)
+                                result["imported"] += single["imported"]
+                                result["duplicates"] += single["duplicates"]
+                                result["redactions"] += single.get("redactions", 0)
+                            except ConflictError as exc:
+                                raise _Transient(type(exc).__name__) from exc
+                            except (ValueError, KeyError) as exc:
+                                self._count(state, "rejected")
+                                refusals.append(str(exc)[:120])
+                        if refusals:  # reasons only, never the refused content
+                            self._notice(state, "event_rejected", f"{len(refusals)} événement(s) refusé(s) par la mémoire : {refusals[0]}")
+                    self._count(state, "imported", result["imported"])
+                    self._count(state, "duplicates", result["duplicates"])
+                    if result.get("redactions"):
+                        self._count(state, "redactions", result["redactions"])
+                    # The store caps one call (events and bytes): the unprocessed tail is sent again, never dropped.
+                    remaining = result.get("remaining", 0)
+                    if not remaining:
+                        break
+                    if not result["imported"]:
+                        self._count(state, "import_stalled", remaining, bucket="skipped")
+                        self._notice(state, "import_stalled", f"{remaining} événement(s) non importé(s) : la mémoire n'a pas progressé.")
+                        break
+                    chunk = chunk[-remaining:]
         ctx.events.clear()
+
+    _TOOL_PREFIX = re.compile(r"Outil : [^\n]*\n")
+
+    def _without_twins(self, state, ctx, project_id, events):
+        """Replay only: an item already held from the other channel (claude-tap or native transcript) is not imported again.
+        The memory itself is the witness, so this holds beyond the bounded ledgers. Like the live ledger, each skipped item
+        consumes one copy of the other channel, so a message really sent twice ("continue", "ok") is kept twice when the
+        other channel holds it once. Only entries stored before the replay began are counted: copies imported during the
+        replay are matched by the ledgers, which consume them already. The consumed counts survive across cycles in
+        state["backfill"]["twins"] (hashes only)."""
+        used = state["backfill"].setdefault("twins", {})
+        known = self._replay_known(ctx, project_id, state["backfill"].get("at_epoch", 0))
+        kept = []
+        for event in events:
+            tags = event.get("tags", ())
+            channel = 0 if "claude-tap" in tags else 1
+            uri = next((source.get("uri", "") for source in event.get("sources", ()) if source.get("uri")), "")
+            if uri in known["uris"]:
+                kept.append(event)  # the same record again: the store's fingerprints absorb it
+                continue
+            key = self._twin_key(event.get("episode", ""), event.get("body", ""), "appel-outil" in tags)
+            counts = known["counts"].setdefault(key, [0, 0])
+            consumed = used.setdefault(f"{project_id}:{key[0]}:{key[1]}", [0, 0])
+            if counts[1 - channel] > consumed[1 - channel]:
+                consumed[1 - channel] += 1
+                self._count(state, "backfill_twin", bucket="skipped")
+                continue
+            known["uris"].add(uri)
+            kept.append(event)
+        return kept
+
+    def _replay_known(self, ctx, project_id, started=0):
+        """What one project's memory already holds from claude-tap and native transcripts, loaded once per cycle: source
+        uris, the tap records ("tap:<session>:<index>") they come from, and per-channel counts of entries stored before
+        the replay began (`started`, epoch seconds)."""
+        known = ctx.twins.get(project_id)
+        if known is None:
+            known = ctx.twins[project_id] = {"uris": set(), "records": set(), "counts": {}}
+            for entry in self.store.list_entries(project_id):
+                tags = entry.get("tags", ())
+                channel = 0 if "claude-tap" in tags else 1 if "repli-natif" in tags else None
+                if channel is None:
+                    continue
+                for source in entry.get("sources", ()):
+                    uri = source.get("uri", "")
+                    known["uris"].add(uri)
+                    if uri.startswith("tap:") and _epoch(entry.get("created_at")) < started:
+                        known["records"].add(uri.rsplit(":", 1)[0])
+                if _epoch(entry.get("created_at")) < started:
+                    known["counts"].setdefault(self._twin_key(entry.get("episode", ""), entry.get("body", ""), "appel-outil" in tags), [0, 0])[channel] += 1
+        return known
+
+    def _twin_key(self, episode, body, call):
+        text = self._TOOL_PREFIX.sub("", body, count=1) if call else body
+        return (episode, hashlib.sha256(text.strip()[:1000].encode("utf-8", "surrogatepass")).hexdigest()[:16])
 
     # --------------------------------------------------------------- processing
     def _process_rows(self, ctx, state, pending, connection, db_key, session_id, client, rows, require_key=None, track=True):
@@ -908,20 +1057,31 @@ class Capture:
     def _place_record(self, ctx, state, pending, db_key, session_id, client, index, timestamp, digest, turn, ids, track, require_key=None):
         fallback = state["fallback"]
         real = {value for _, value in ids if value}
+        marks = []
         if len(real) == 1:
             native, now, kept = next(iter(real)), _clock(), []
+            window, cap, sessions = _ledger_limits(state)
+            # A replay only remembers tap items when a native transcript may later meet them.
+            remember = track and (not state.get("backfill") or (ctx.settings["sources"]["native_fallback"] and ctx.settings["sources"]["native_index"]))
             for item in turn["items"]:
                 mark = _item_digest(item)
-                if mark and _ledger_take(fallback["native_seen"], native, mark, now):
+                if mark and _ledger_take(fallback["native_seen"], native, mark, now, window):
                     self._count(state, "native_duplicate", bucket="skipped")  # already captured from the native transcript
                     continue
-                if mark and track:
-                    _ledger_add(fallback["tap_seen"], native, mark, now)
+                if mark and remember:
+                    marks.append(mark)
                 kept.append(item)
             turn["items"] = kept
         if not turn["items"]:
             return
         outcome = self._link(ctx, session_id, ids)
+        if marks:
+            # During a replay, a record already in memory before it began is accounted for by _without_twins; remembering
+            # it in the ledger as well would let one tap copy hide two native ones.
+            if not (state.get("backfill") and outcome["status"] == "linked"
+                    and f"tap:{session_id}:{index}" in self._replay_known(ctx, outcome["project_id"], state["backfill"].get("at_epoch", 0))["records"]):
+                for mark in marks:
+                    _ledger_add(fallback["tap_seen"], native, mark, now, cap, sessions)
         if require_key and require_key not in outcome.get("mapped_keys", ()):
             return
         if outcome["status"] == "pending":
@@ -1009,8 +1169,11 @@ class Capture:
                 self._count(state, "deleted_upstream")
                 self._notice(state, "deleted_upstream", f"session tap {gone[:8]} supprimée en amont ; la mémoire est conservée.")
             budget = MAX_RECORDS_PER_CYCLE
+            replay_tap = (state.get("backfill") or {}).get("tap") or {}
             for session_id, info in sessions.items():
                 cursor = cursors.get(session_id, 0)
+                if replay_tap.get(session_id, 0) > info["max_index"]:
+                    replay_tap[session_id] = info["max_index"]  # truncated upstream: the replay ends where the session now ends
                 if info["max_index"] < cursor:
                     self._count(state, "rewritten")
                     self._notice(state, "truncated", f"session tap {session_id[:8]} tronquée en amont.")
@@ -1106,6 +1269,10 @@ class Capture:
             state["fallback_hold"] = False
             fallback["baselined_at"] = time.time()
             return
+        if state.get("backfill") and not self._backfill_tap_done(state, ctx.settings):
+            # Replay order: claude-tap first, so the tap ledger and the memory hold every tap item before a
+            # native transcript is read; otherwise the native copy would arrive first and be imported twice.
+            return
         index.refresh()
         waits = fallback["waits"]
         gaps = fallback["gaps"] = fallback["gaps"] if isinstance(fallback.get("gaps"), dict) else {}
@@ -1179,7 +1346,7 @@ class Capture:
                     self._count(state, "native_oversize_line", oversize, bucket="malformed")
                 files[path] = new_offset
                 stalled.pop(path, None)
-            elif path in stalled or len(stalled) < MAX_STALLED:
+            elif path in stalled or len(stalled) < (BACKFILL_MAX_STALLED if state.get("backfill") else MAX_STALLED):
                 files[path] = start
                 known = stalled.get(path, {})
                 if not known:
@@ -1269,9 +1436,10 @@ class Capture:
         for reason, number in skipped.items():
             self._count(state, "fallback_" + reason, number, bucket="skipped")
         ledgers, now, kept = state["fallback"], _clock(), []
+        window, cap, sessions = _ledger_limits(state)
         for number, item in enumerate(items):
             mark = _item_digest(item)
-            if mark and _ledger_take(ledgers["tap_seen"], native, mark, now):
+            if mark and _ledger_take(ledgers["tap_seen"], native, mark, now, window):
                 self._count(state, "fallback_tap_duplicate", bucket="skipped")  # already captured through claude-tap
                 continue
             kept.append((number, item, mark))
@@ -1292,7 +1460,7 @@ class Capture:
         for number, item, mark in kept:
             text, found = redact_whole(item["text"])  # before the title/excerpt cuts below
             who = f"Humain via {agent}" if item["kind"] == "user_text" else agent
-            provenance = {"collector": "native-fallback", "native_id": native, "native_source": source, "native_file": Path(path).name, "cwd": resolution.get("cwd"), "link": "explicit" if resolution.get("explicit") else "native", "claim": "transcription locale, non authentifiée"}
+            provenance = {"collector": "native-fallback", "native_id": native, "native_source": source, "native_file": Path(path).name, "cwd": resolution.get("cwd"), "link": "explicit" if resolution.get("explicit") else "native", **({"worktree_of": resolution["worktree_of"]} if resolution.get("worktree_of") else {}), "claim": "transcription locale, non authentifiée"}
             if resolution.get("explicit"):
                 provenance.update(target_folder=(project.get("folder") or {}).get("path"), target_basis="dossier du projet choisi explicitement par l'utilisateur ; aucune preuve de dossier natif")
             ctx.events.setdefault(project_id, []).append(PreRedacted({
@@ -1301,7 +1469,7 @@ class Capture:
                 "tags": ["capture", "repli-natif", "codex" if source == "codex" else "claude-code", item["kind"].replace("_", "-")],
                 "provenance": provenance, "pre_redactions": found}))
             if mark:
-                _ledger_add(ledgers["native_seen"], native, mark, now)
+                _ledger_add(ledgers["native_seen"], native, mark, now, cap, sessions)
         self._count(state, "fallback_imported", len(kept))
         return None
 
@@ -1356,10 +1524,43 @@ class Capture:
                 result["detail"] = str(exc)
                 self.last_cycle = {"at": _utc(), **result}
                 return result
+            self._finish_backfill(state, settings)
             state["last_scan"] = {"at": _utc(), **{key: value for key, value in result.items() if isinstance(value, (str, int, bool))}}
             self._save(state, pending)
             self.last_cycle = state["last_scan"]
             return result
+
+    @staticmethod
+    def _backfill_tap_done(state, settings) -> bool:
+        replay, tap = state.get("backfill") or {}, state["tap"]
+        return (not settings["tap"]["enabled"] or tap.get("db_key") != replay.get("db_key")
+                or all(tap["cursors"].get(sid, 0) >= target or sid in tap["deleted"] for sid, target in replay.get("tap", {}).items()))
+
+    def _finish_backfill(self, state, settings):
+        """Close an explicit `filigree backfill` replay once every source has reached the place it was rewound from."""
+        replay = state.get("backfill")
+        if not replay:
+            return
+        fallback = state["fallback"]
+        tap_done = self._backfill_tap_done(state, settings)
+        native_on = settings["sources"]["native_fallback"] and settings["sources"]["native_index"]
+        files_done = (not native_on or all(fallback["files"].get(path, 0) >= target or path in fallback["stalled"] or not os.path.exists(path)
+                                           for path, target in replay.get("files", {}).items()))
+        expired = time.time() - replay.get("at_epoch", 0) > BACKFILL_MAX_AGE
+        if not ((tap_done and files_done) or expired):
+            return
+        # Back to the live rules: the old-transcript guard returns and the ledgers shrink to the live window.
+        if isinstance(replay.get("baselined_at"), (int, float)):
+            fallback["baselined_at"] = replay["baselined_at"]
+        now = _clock()
+        for name in ("tap_seen", "native_seen"):
+            ledger = fallback[name]
+            for native in list(ledger):
+                ledger[native] = [entry for entry in ledger[native] if entry[1] >= now - DEDUP_WINDOW][-MAX_LEDGER_ITEMS:]
+                if not ledger[native]:
+                    del ledger[native]
+        state["backfill"] = {}
+        self._notice(state, "backfill_done", "Rattrapage de l'historique terminé." if not expired else "Rattrapage de l'historique clos après 7 jours (certaines sources n'ont pas pu être relues).")
 
     # ------------------------------------------------------------- run / control
     def _stop_requested(self) -> bool:

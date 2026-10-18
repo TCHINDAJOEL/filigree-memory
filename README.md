@@ -1,10 +1,12 @@
 # Filigree
 
+[![Verify Filigree](https://github.com/TCHINDAJOEL/filigree-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/TCHINDAJOEL/filigree-memory/actions/workflows/ci.yml)
+
 **Keep the why.** A local, living project memory for people and AI agents.
 
 Your repository remembers what changed. Filigree helps preserve **why it changed**: the proposal, the correction, the rejected option, the source, and the decision that followed.
 
-> Early release · Python 3.11+ · Zero runtime dependencies · Local web interface · MCP stdio · MIT
+> v0.2 · Python 3.11+ · Zero runtime dependencies · Local web interface · Permanent local observer · MCP stdio · MIT
 
 ![Filigree's local knowledge workbench (synthetic demo project)](.github/assets/workbench.png)
 
@@ -12,14 +14,59 @@ Your repository remembers what changed. Filigree helps preserve **why it changed
 
 ## Quickstart: a memory that follows your folders
 
+📖 **Documentation (French):** [Prise en main, application par application](docs/guide/prise-en-main.md) (start here: Claude Code, Claude Desktop, Codex CLI, Codex app, claude.ai, ChatGPT) · [Guide complet illustré](docs/guide/README.md) (every screen, how it works, security, troubleshooting).
+
+![How Filigree works](docs/guide/images/schema-architecture.svg)
+
+| You use | Filigree observes your sessions | The agent reads the memory (MCP) | Setup |
+| --- | --- | --- | --- |
+| Claude Code (terminal, VS Code, JetBrains) | Yes: native transcripts | Yes: `claude mcp add` (scope from MCP roots) | [A](docs/guide/prise-en-main.md#a-claude-code) |
+| Claude Desktop, Code tab | Yes, through the Claude Code transcript | Yes: `claude_desktop_config.json` | [B](docs/guide/prise-en-main.md#b-claude-desktop) |
+| Claude Desktop, chat | No | Yes: `claude_desktop_config.json` | [B](docs/guide/prise-en-main.md#b-claude-desktop) |
+| Codex CLI | Yes: rollouts + state database | Yes: `codex mcp add` | [C](docs/guide/prise-en-main.md#c-codex-cli) |
+| Codex app (Codex Desktop, VS Code extension) | Yes: same `~/.codex` files as the CLI | Same `config.toml` as the CLI | [D](docs/guide/prise-en-main.md#d-application-codex-et-extension-vs-code) |
+| claude.ai, ChatGPT | No | No (remote services) | [E](docs/guide/prise-en-main.md#e-claudeai-et-chatgpt): `import-export` |
+
 ```sh
-python -m pip install .                                   # Python 3.11+, no runtime dependencies
-filigree --data-dir ~/FiligreeMemory serve                # workbench on http://127.0.0.1:7820 + capture monitor
-filigree --data-dir ~/FiligreeMemory mcp-config --client claude   # prints the MCP snippet; you install it once
-cd /path/to/your/project && claude                        # or: codex, or claude-tap -- …
+git clone https://github.com/TCHINDAJOEL/filigree-memory.git && cd filigree-memory
+python -m pip install .                                    # Python 3.11+, no runtime dependency
+export FILIGREE_DATA_DIR=~/FiligreeMemory                  # Windows: $env:FILIGREE_DATA_DIR="E:\FiligreeMemory"
+filigree setup --root ~/code                               # the only folders Filigree may observe
+filigree create "My app" --folder ~/code/my-app            # a project is a real folder
+filigree agent                                             # workbench on http://127.0.0.1:7820 + capture + activity journal
+filigree mcp-config --client claude                        # prints the MCP snippet; you install it once
+cd ~/code/my-app && claude                                 # or: codex
+```
+
+Optional, each one explicit and reversible:
+
+```sh
+filigree service install            # start the agent at login (HKCU Run key / LaunchAgent / systemd --user)
+filigree hooks install --client claude --inject --dry-run   # shows the diff first; drop --dry-run to apply (backup kept)
+filigree status                     # everything Filigree installed or runs, as JSON
+filigree probe                      # read-only: which local agent sources are readable (counts only)
 ```
 
 While the server (or `filigree capture start --background`) runs, a Claude Code or Codex session started in a real folder files **proposals** under a project bound to that folder, created on first use. On 2026-10-16, on the current build, real Claude Code runs passed: a writer/reader journey with real-browser acceptance and MCP retrieval (Sonnet), claude-tap capture, direct-launch capture and an MCP handoff (Haiku). Each is a single synthetic run on one machine, not a guarantee for other clients or versions; see the [execution report](.aiwg/testing/release-execution.md). Codex compatibility is covered by synthetic fixtures only, not a real-client run. Nothing becomes a decision until you accept it in *Connaissances*. Details, delays and limits are under [Automatic capture](#automatic-capture-bound-to-your-project-folders).
+
+## What v0.2 adds: a permanent local observer
+
+| Command | What it does | Writes outside the data folder? |
+| --- | --- | --- |
+| `filigree agent` | One background process per data folder: workbench + API, v0.1 capture, activity journal, session sheets | No |
+| `filigree setup --root DIR` | Confines observation and project creation to these folders (`--any-folder` restores v0.1) | No |
+| `filigree service install` | Starts the agent at login, per user, no admin rights | Yes: one registry value / LaunchAgent / systemd user unit |
+| `filigree hooks install --client claude\|codex` | Session start/end signals; `--inject` adds the project's **accepted** knowledge to new Claude sessions | Yes: your Claude `settings.json` or Codex `config.toml`, with a timestamped backup |
+| `filigree import-export FILE --project ID` | ChatGPT or claude.ai export (`.json` or `.zip`) → proposals in an explicit project | No |
+| `filigree backfill [--dry-run]` | One-time, explicit replay of the history that existed before capture started (stop the agent first); same evidence rules as live capture | No |
+| `filigree activity ID` · `probe` · `status` | Read-only reports (JSON) | No |
+
+- **Activity journal.** Each project gets `projects/<id>/.filigree/activity.sqlite`: prompts, file changes, commands (program name only, never the command line), test outcomes, errors and commits, extracted deterministically from the Claude Code and Codex transcripts of sessions started in that project's folder. Summaries are redacted before being cut to 280 characters; reasoning and injected blocks are excluded. It is unreviewed evidence, kept 90 days by default, never committed by Git checkpoints and never exported.
+- **Session sheets.** After 10 idle minutes (or a session-end signal) each session becomes **one proposal** in *Connaissances*, revised while it is still a proposal; once you accept or reject it, new activity creates a separate "suite" proposal. No model is called.
+- **Overlaps.** The *Activité* view and the `active_sessions` MCP tool show files changed by more than one session in the last 15 minutes.
+- **No automatic catch-up.** Transcripts that exist when the observer first runs are not read backwards; only new activity is journaled. `filigree backfill` replays that history once, only when you ask for it.
+
+The design and its trade-offs are in [ADR-0003](.aiwg/architecture/ADR-0003-permanent-observer.md); executed evidence is in [.aiwg/testing/](.aiwg/testing/v2-1-resolution-auth.md).
 
 ## Try it in two minutes
 
@@ -71,6 +118,8 @@ python -m filigree --data-dir .filigree-data import PROJECT_ID examples/events.j
 python -m filigree --data-dir .filigree-data handoff PROJECT_ID --query "cadrage"
 ```
 
+Codex 0.16x deletes old rollout files and keeps thread history only in `~/.codex/thread_history_1.sqlite`; `filigree import-codex-history [--dry-run]` reads it (read-only, on request) and files proposals under the folder Codex recorded for each thread, with the capture's folder rules. Live capture and the activity journal still read rollouts and the state database only.
+
 Supported inputs: normalized JSON events, JSONL, plain `.txt`/`.md` notes, Claude Code visible conversation records, Codex `response_item` messages, and documented claude-tap raw JSONL/full JSON exports. The fixtures in `examples/` are synthetic. Compact `.ctap.json` bundles and WebSocket-only traces are not supported; unsupported records are not a promise of complete transcript fidelity.
 
 For claude-tap, use its **full JSON export**, not the compact default:
@@ -96,25 +145,32 @@ After installing the package, configure your MCP-capable client using [examples/
 python -m filigree --data-dir /absolute/path/to/memory mcp
 ```
 
-Tools: `list_projects`, `project_for_folder`, `search_memory`, `get_handoff`, `propose_memory`. `project_for_folder` is read-only: it returns the project registered for an absolute folder (nearest registered ancestor) and never creates one.
+Tools: `list_projects`, `project_for_folder`, `search_memory`, `get_handoff` (option `accepted_only`), `propose_memory`, and the read-only `project_activity` and `active_sessions` (unreviewed journal data). `project_for_folder` is read-only: it returns the project registered for an absolute folder (nearest registered ancestor) and never creates one.
 
-To see the exact configuration for your client, run `filigree --data-dir /absolute/path/to/memory mcp-config --client claude` (or `codex`). It only **prints** the snippet; you install it yourself, once, and Filigree never edits an agent configuration, `CLAUDE.md` or `AGENTS.md`. Without that MCP configuration, an agent cannot recall the memory; automatic capture only *writes* proposals. The transport implements the MCP 2025-11-25 initialization and tools subset over stdio. It does not claim certification or integration testing with every client. See [the integration contract](.aiwg/architecture/claude-tap-integration.md).
+Since v0.2 the server is **scoped to one project**. Without an explicit option, it asks the client for its MCP *roots* (its working folders) and serves the projects registered there, falling back to its own working directory. Claude Code does not start MCP servers in the session folder, so this matters, and it is verified live. `--project-folder DIR` serves one given project (required for Claude Desktop); `--all-projects` serves every project explicitly. A call outside the scope is refused.
+
+To see the exact configuration for your client, run `filigree mcp-config --client claude|codex|claude-desktop` (add `--command` for the one-line `claude mcp add …` / `codex mcp add …`, and `--project-folder DIR` or `--all-projects` to fix the scope). It only **prints** the snippet; you install it yourself, once, and Filigree never edits an agent configuration, `CLAUDE.md` or `AGENTS.md`. Without that MCP configuration, an agent cannot recall the memory; automatic capture only *writes* proposals. The transport implements the MCP 2025-11-25 initialization and tools subset over stdio. It does not claim certification or integration testing with every client. See [the integration contract](.aiwg/architecture/claude-tap-integration.md).
 
 ## Architecture
 
 ```text
- claude-tap SQLite (read-only, schema v4) ──┐                         ┌─ Web workbench  (127.0.0.1, token-protected writes)
+ claude-tap SQLite (read-only, schema v4) ──┐                         ┌─ Web workbench  (127.0.0.1, local key on every API call)
  native Claude / Codex transcripts ─────────┤  capture monitor        ├─ CLI            (filigree …)
-   (sessionId + cwd; new lines, fallback)   ├─ exact session id ──▶  Store ─ MCP stdio   (read + propose only)
+   (sessionId + cwd; new lines, fallback)   ├─ exact session id ──▶  Store ─ MCP stdio   (scoped; read + propose only)
  explicit imports (JSON, JSONL, notes) ─────┘  → folder → project     └─ Markdown files + optional Git checkpoints
+ chat exports (ChatGPT, claude.ai) ──────────── explicit project ──▶  Store
+ collectors (Claude Code, Desktop, Codex) ──▶ activity observer ──▶ activity.sqlite per project ──▶ session-sheet proposals
+                                     filigree agent runs all of the above in one process per data folder
 ```
 
 - `filigree/store.py` is the single writer: Markdown entries with a JSON metadata block, revision history, an event journal and one workspace lock shared by every process.
 - `filigree/tap_source.py` and `filigree/native_index.py` are read-only adapters (stdlib `sqlite3` and file reads); nothing from claude-tap is imported or executed.
 - `filigree/capture.py` links a record to a folder only through an identifier that is **exactly** equal on both sides, then imports proposals with provenance. State lives in `<data-dir>/.capture/`, outside every project and Git checkpoint.
 - `filigree/server.py` serves the static UI and a JSON API on loopback only; `filigree/mcp.py` exposes the same store to agents without any acceptance tool.
+- `filigree/collectors/` reads session metadata (never message text) from Claude Code, Claude Desktop and Codex, read-only and bounded; `filigree/resolver.py` holds the allowed-roots and proven-worktree rules.
+- `filigree/extract.py`, `filigree/activity.py` and `filigree/distill.py` build the activity journal and the session sheets; `filigree/agent.py`, `filigree/service.py` and `filigree/hooks.py` are the daemon, the optional autostart and the optional hooks.
 
-Decisions: [ADR-0001](.aiwg/architecture/ADR-0001-local-portable-memory.md) (portable memory), [ADR-0002](.aiwg/architecture/ADR-0002-automatic-project-capture.md) (capture) and [the claude-tap contract](.aiwg/architecture/claude-tap-integration.md).
+Decisions: [ADR-0001](.aiwg/architecture/ADR-0001-local-portable-memory.md) (portable memory), [ADR-0002](.aiwg/architecture/ADR-0002-automatic-project-capture.md) (capture), [ADR-0003](.aiwg/architecture/ADR-0003-permanent-observer.md) (permanent observer) and [the claude-tap contract](.aiwg/architecture/claude-tap-integration.md).
 
 ## Automatic capture, bound to your project folders
 
@@ -174,17 +230,20 @@ memory/
       history/<stable-entry-id>/<revision>.md
       events/<event-id>.json
       imports.json
+      activity.sqlite        # v0.2 journal: kept data, never in a Git checkpoint or an export
+  .capture/                  # capture.json settings, capture and observer state
+  .runtime/                  # agent.key, agent.json, signals.jsonl, install-log.jsonl, agent.log
 ```
 
-Each project's `project.json` holds its `folder` (`path` and `key`). Capture state is separate, under `<data-dir>/.capture/`.
+Each project's `project.json` holds its `folder` (`path` and `key`). Capture state is separate, under `<data-dir>/.capture/`. `filigree status` lists every artifact present. The journal cannot be rebuilt once the agents have purged their own transcripts.
 
 Each entry contains readable Markdown plus a fenced JSON metadata block. No database reconstruction is required: restart the app against the copied data directory. A cloned project memory repository belongs under `memory/projects/<its-original-id>/`; its `project.json` retains that ID. Read the [portability guide](.aiwg/deployment/user-guide.md) before moving or editing files.
 
 ## Boundaries we make explicit
 
-Version 0.1 deliberately provides a local workflow with visible sources and human review. It does **not** automatically extract reliable decisions from free conversation, detect contradictions with a model, recover hidden model reasoning, learn personal habits across projects, or synchronize multiple users. Episode labels group notes; they are not autonomous task objects yet. Search is lexical, and relationships are explicit.
+Filigree deliberately provides a local workflow with visible sources and human review. It does **not** automatically extract reliable decisions from free conversation, detect contradictions with a model, recover hidden model reasoning, learn personal habits across projects, or synchronize multiple users. Episode labels group notes; they are not autonomous task objects yet. Search is lexical, and relationships are explicit.
 
-There is no cloud telemetry or required model call in the application. Imported text can still contain sensitive information. Secret filtering is heuristic; review material before publication. The local server is not suitable for public hosting. See [SECURITY.md](SECURITY.md).
+There is no cloud telemetry and no model call in the application (v0.2 included: session sheets are deterministic digests). Claude Desktop sessions are listed from metadata only; their content is captured only through the matching Claude Code transcript, when one exists. Codex rollouts compressed as `.zst` are reported, not read. macOS and Linux autostart plans are tested synthetically; Windows is the reference platform. Imported text can still contain sensitive information. Secret filtering is heuristic; review material before publication. The local server is not suitable for public hosting. See [SECURITY.md](SECURITY.md).
 
 These boundaries are part of the design, with a [roadmap and acceptance criteria](.aiwg/planning/delivery-plan.md), rather than features silently simulated in the demo.
 
@@ -198,9 +257,12 @@ npx playwright install chromium
 npm test                                       # browser journeys; the server runs with --no-capture
 python -m pip wheel . --no-deps --wheel-dir .runtime/wheels
 python scripts/verify_package.py               # isolated wheel install, packaged UI, served with --no-capture
+python scripts/verify_agent_e2e.py             # real `filigree agent` process, synthetic transcript, no model call
 ```
 
-Node is a development-only dependency. The Python tests cover persistence, provenance, governance, concurrent writers, recovery, imports, MCP, HTTP boundaries, Git clone portability and capture. Browser tests exercise actual user journeys. CI is configured for Windows/Linux and Python 3.11/3.14; the [verification report](.aiwg/testing/verification.md) distinguishes local evidence, source-only checks and CI runs.
+Node is a development-only dependency. The Python tests cover persistence, provenance, governance, concurrent writers, recovery, imports, MCP, HTTP boundaries, Git clone portability and capture. Browser tests exercise actual user journeys. CI is configured for Windows/Linux/macOS and Python 3.11/3.14; the [verification report](.aiwg/testing/verification.md) distinguishes local evidence, source-only checks and CI runs.
+
+`scripts/verify_live_observer.py` (v0.2) is a manual, opt-in live check of the observer: a real `filigree agent` must journal one real Claude Code (haiku) session started in a synthetic folder and propose its session sheet. Latest results of all live checks: [v2-live-verification.md](.aiwg/testing/v2-live-verification.md).
 
 `scripts/verify_live_capture.py` is a separate, **manual, opt-in** smoke check outside the suites above: it makes one bounded `claude-tap` call (Claude Code, model `haiku`, 300 s, no retry) in a synthetic folder, against a fresh claude-tap database and memory under `.runtime/live-capture/`. It consumes model quota and proves one client on one machine only. `--check-only` verifies the isolation without calling Claude.
 
