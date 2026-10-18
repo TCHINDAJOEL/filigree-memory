@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -15,7 +16,8 @@ from filigree.capture import Capture, default_settings
 from filigree.store import ConflictError, Store
 
 SECRET = "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
-EXTENDED = "\\\\?\\"
+# Codex on Windows records extended-length paths; the prefix does not exist on other systems.
+EXTENDED = "\\\\?\\" if os.name == "nt" else ""
 
 
 def item(kind, identifier, **fields):
