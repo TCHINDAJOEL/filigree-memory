@@ -242,12 +242,19 @@ def main(argv=None):
     chat = sub.add_parser("import-export", help="Import a ChatGPT or claude.ai export (.json or .zip) as proposals")
     chat.add_argument("file", type=Path)
     chat.add_argument("--project", required=True, help="Target project id (always explicit)")
+    codex_history = sub.add_parser("import-codex-history", help="Import the history of Codex threads whose rollout file was deleted (proposals only)")
+    codex_history.add_argument("--dry-run", action="store_true", help="Only report what would be imported; write nothing, create no project")
+    codex_history.add_argument("--thread", help="Import a single thread id")
+    codex_history.add_argument("--since", help="Only threads updated since this date (ISO, e.g. 2026-05-01)")
+    codex_history.add_argument("--codex-home", type=Path, help="Codex folder (default: CODEX_HOME or ~/.codex)")
     config = sub.add_parser("mcp-config", help="Print (never install) the MCP configuration for a client")
     config.add_argument("--client", choices=["claude", "codex", "claude-desktop"], required=True)
     config_scope = config.add_mutually_exclusive_group()
     config_scope.add_argument("--project-folder", type=Path, help="Serve this folder's project (required for claude-desktop unless --all-projects)")
     config_scope.add_argument("--all-projects", action="store_true", help="Serve every project explicitly")
     config.add_argument("--command", dest="as_command", action="store_true", help="Print the one-line `claude mcp add` / `codex mcp add` command instead")
+    backfill = sub.add_parser("backfill", help="Replay the existing agent history once, on explicit request (stop the agent first)")
+    backfill.add_argument("--dry-run", action="store_true", help="Only report what would be replayed; change nothing")
     capture = sub.add_parser("capture", help="Automatic capture of agent sessions")
     actions = capture.add_subparsers(dest="action", required=True)
     run = actions.add_parser("run", help="Run the monitor in the foreground")
@@ -296,6 +303,11 @@ def main(argv=None):
         if args.command in {"probe", "status", "service", "hooks"}:
             print(json.dumps(v2_command(args), ensure_ascii=False, indent=2))
             return
+        if args.command == "backfill":
+            from . import backfill as catch_up
+            data_dir = args.data_dir.expanduser().resolve()
+            print(json.dumps((catch_up.plan if args.dry_run else catch_up.rewind)(data_dir), ensure_ascii=False, indent=2))
+            return
         store = Store(args.data_dir)
         if args.command == "capture":
             return capture_command(store, args)
@@ -314,6 +326,9 @@ def main(argv=None):
             from .server import project_activity
             store.get_project(args.project_id)
             result = project_activity(store, args.project_id, args.limit)
+        elif args.command == "import-codex-history":
+            from .codex_history import import_history
+            result = import_history(store, codex_home=args.codex_home, dry_run=args.dry_run, thread=args.thread, since=args.since)
         elif args.command == "import-export":
             from .chat_export import parse_chat_export
             store.get_project(args.project)

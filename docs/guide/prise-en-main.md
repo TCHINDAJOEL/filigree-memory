@@ -124,7 +124,7 @@ Si le fichier contient déjà une section `mcpServers`, ajoutez-y seulement l'en
 
 ## C. Codex CLI
 
-Codex écrit ses sessions dans `~/.codex/sessions/` et son index dans `~/.codex/state_5.sqlite`. Filigree lit les deux en lecture seule.
+Codex écrit ses sessions dans `~/.codex/sessions/` et son index dans `~/.codex/state_5.sqlite`. Filigree lit les deux en lecture seule. Les fils anciens, dont Codex a supprimé le fichier de session, se récupèrent avec `filigree import-codex-history` (voir plus bas).
 
 **1. Travailler :**
 
@@ -214,6 +214,14 @@ filigree mcp-config --client claude|codex|claude-desktop [--command]
 filigree hooks install --client claude --inject --dry-run
 filigree import-export FICHIER.zip --project ID
 ```
+
+## Importer l'historique existant (`filigree backfill`)
+
+Filigree ne relit pas le passé tout seul. Pour récupérer aussi les sessions déjà faites : arrêtez l'agent, lancez `filigree backfill --dry-run` pour voir ce qui serait relu, puis `filigree backfill`, et relancez `filigree agent`. L'historique arrive en propositions, avec les mêmes preuves de dossier que le direct ; une session sans dossier prouvé reste en attente. Le relancer ne crée pas de doublons.
+
+## Importer l'historique Codex
+
+Codex 0.16x supprime ses anciens fichiers de session et ne garde l'historique que dans `~/.codex/thread_history_1.sqlite`. Pour récupérer ces fils : `filigree import-codex-history --dry-run` (comptages seulement), puis `filigree import-codex-history`. Le dossier de chaque fil est celui que Codex a enregistré ; un fil dont le dossier n'existe plus, est hors des racines autorisées ou exclu est ignoré et compté avec sa raison. Les fils dont le fichier de session existe encore restent à la capture en direct. Tout arrive en propositions, sans doublon si vous relancez.
 
 ## En cas de souci
 

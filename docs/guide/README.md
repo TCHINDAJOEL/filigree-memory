@@ -362,6 +362,33 @@ filigree import-export ~/Téléchargements/export.zip --project <ID_PROJET>
 - Les secrets reconnus sont masqués, et chaque message devient une **proposition**.
 - Réimporter la même archive ne crée pas de doublon.
 
+### Importer l'historique existant (`filigree backfill`)
+
+Par principe, Filigree ne relit jamais le passé tout seul : seule l'activité qui suit son démarrage est capturée. Si vous voulez aussi les sessions antérieures :
+
+1. Arrêtez l'agent (fermez-le, ou `filigree service uninstall` s'il démarre à l'ouverture de session).
+2. `filigree backfill --dry-run` annonce ce qui serait relu (sessions et enregistrements claude-tap, transcriptions natives, transcriptions du journal d'activité) sans rien modifier.
+3. `filigree backfill` remet les curseurs au début. Relancez ensuite `filigree agent` : l'historique est relu par cycles successifs.
+
+Les règles sont celles du direct : une session n'est rattachée à un projet que si son identifiant natif retrouve une transcription qui nomme son dossier ; sinon elle reste en attente. Tout arrive en propositions à examiner. Les traces claude-tap sont relues en premier. Un même échange vu par claude-tap et par la transcription native n'est gardé qu'une fois, et relancer la commande ne crée aucun doublon. Attention : une pause passée n'a pas laissé de trace durable, donc son contenu est relu, sauf les intervalles que la capture connaît encore. Les dossiers exclus et les projets en pause restent ignorés.
+
+### Importer l'historique Codex (`filigree import-codex-history`)
+
+Les versions récentes de Codex (0.16x) gardent l'historique des fils dans `~/.codex/thread_history_1.sqlite` et suppriment les anciens fichiers de session : les fils anciens n'apparaissent donc plus dans les transcriptions. Cette commande relit cet historique, en lecture seule, **à votre demande** :
+
+```sh
+filigree import-codex-history --dry-run            # compte seulement : rien n'est écrit, aucun projet n'est créé
+filigree import-codex-history                      # importe, en propositions
+filigree import-codex-history --thread ID --since 2026-05-01
+```
+
+- Le dossier d'un fil est celui que Codex a enregistré pour lui (`state_5.sqlite`). Il doit exister, se trouver sous une racine autorisée, ne pas être exclu ni générique ; sinon le fil est **ignoré et compté avec sa raison**, jamais rattaché au jugé.
+- Le projet est celui qui possède déjà le dossier, ou il est créé comme le fait la capture (réglage `auto_create`).
+- Les fils dont le fichier de session existe encore sont laissés à la capture en direct (`live_source`).
+- Sont proposés : vos messages, les réponses de Codex, les plans, les commandes (nom du programme seulement), les modifications de fichiers (noms seulement, jamais le contenu) et les appels d'outils (nom et statut). Le raisonnement interne n'est pas lu. Les secrets reconnus sont masqués avant toute coupure.
+- Chaque proposition porte sa provenance (fil, tour, élément, ordre dans le fil). Relancer la commande ne crée aucun doublon, et un message déjà capturé en direct n'est pas proposé une seconde fois.
+- Elle peut tourner pendant que l'agent est lancé : les écritures passent par le même verrou de la mémoire. Si la mémoire est occupée, relancez-la ; rien n'est perdu.
+
 ## 9. Référence des commandes
 
 | Commande | Rôle |
@@ -382,6 +409,8 @@ filigree import-export ~/Téléchargements/export.zip --project <ID_PROJET>
 | `filigree hooks install\|uninstall\|status --client …` | Hooks optionnels |
 | `filigree service install\|uninstall\|status` | Démarrage automatique optionnel |
 | `filigree capture status\|pending\|link\|pause\|resume\|exclude…` | Piloter la capture fine |
+| `filigree backfill [--dry-run]` | Importer l'historique existant, à votre demande (arrêter l'agent d'abord) |
+| `filigree import-codex-history [--dry-run] [--thread ID] [--since DATE]` | Importer l'historique des fils Codex dont le fichier de session a été supprimé |
 | `filigree probe` | Sources d'agents lisibles sur ce poste (comptages seulement) |
 | `filigree status` | Tout ce que Filigree a installé ou fait tourner, et ses fichiers (JSON) |
 

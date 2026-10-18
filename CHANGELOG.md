@@ -2,6 +2,16 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `filigree backfill [--dry-run]`: an explicit, user-requested catch-up of the history that capture and the activity observer skip by design (ADR-0003 D11, amended 2026-10-18). With the agent and the capture stopped, it rewinds the claude-tap cursors, the native-transcript offsets and the activity offsets; the next cycles replay the history through the same code paths as live activity, so a record is attached only when its native session id resolves to a transcript folder, and goes pending otherwise. claude-tap is replayed first, before any native transcript is read; items already in memory from the other channel are not imported a second time; and a rerun creates no duplicates. Past pauses left no durable record and are re-read, except pause intervals the capture still holds. `--dry-run` reports the counts and changes nothing.
+
+- `filigree import-codex-history [--dry-run] [--thread ID] [--since DATE]`: reads Codex 0.16x thread history (`thread_history_N.sqlite`), which survives the deletion of old rollout files, and files it as proposals. The folder is the cwd Codex recorded in `state_N.sqlite`, resolved by the capture's own rules (allowed roots, exclusions, generic folders, deepest project, worktree, `auto_create`); an unprovable thread is skipped and counted with its reason, and a thread whose rollout still exists is left to the live capture. Commands keep their program name only, file changes their file names only, tool calls their name and status; reasoning is never read. Source uris `codex-thread:<thread>:<item>` make reruns idempotent; text already captured live is not proposed twice. No session sheet is written (they derive from the activity journal).
+
+### Fixed
+- Capture now sends again the events that the memory store declined to process in one call (5000 events or 5 MB cap) instead of dropping them silently.
+
 ## [0.2.0] — 2026-10-17
 
 The permanent local observer ([ADR-0003](.aiwg/architecture/ADR-0003-permanent-observer.md)).

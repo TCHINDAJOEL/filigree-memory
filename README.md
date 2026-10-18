@@ -58,12 +58,13 @@ While the server (or `filigree capture start --background`) runs, a Claude Code 
 | `filigree service install` | Starts the agent at login, per user, no admin rights | Yes: one registry value / LaunchAgent / systemd user unit |
 | `filigree hooks install --client claude\|codex` | Session start/end signals; `--inject` adds the project's **accepted** knowledge to new Claude sessions | Yes: your Claude `settings.json` or Codex `config.toml`, with a timestamped backup |
 | `filigree import-export FILE --project ID` | ChatGPT or claude.ai export (`.json` or `.zip`) → proposals in an explicit project | No |
+| `filigree backfill [--dry-run]` | One-time, explicit replay of the history that existed before capture started (stop the agent first); same evidence rules as live capture | No |
 | `filigree activity ID` · `probe` · `status` | Read-only reports (JSON) | No |
 
 - **Activity journal.** Each project gets `projects/<id>/.filigree/activity.sqlite`: prompts, file changes, commands (program name only, never the command line), test outcomes, errors and commits, extracted deterministically from the Claude Code and Codex transcripts of sessions started in that project's folder. Summaries are redacted before being cut to 280 characters; reasoning and injected blocks are excluded. It is unreviewed evidence, kept 90 days by default, never committed by Git checkpoints and never exported.
 - **Session sheets.** After 10 idle minutes (or a session-end signal) each session becomes **one proposal** in *Connaissances*, revised while it is still a proposal; once you accept or reject it, new activity creates a separate "suite" proposal. No model is called.
 - **Overlaps.** The *Activité* view and the `active_sessions` MCP tool show files changed by more than one session in the last 15 minutes.
-- **No catch-up.** Transcripts that exist when the observer first runs are not read backwards; only new activity is journaled.
+- **No automatic catch-up.** Transcripts that exist when the observer first runs are not read backwards; only new activity is journaled. `filigree backfill` replays that history once, only when you ask for it.
 
 The design and its trade-offs are in [ADR-0003](.aiwg/architecture/ADR-0003-permanent-observer.md); executed evidence is in [.aiwg/testing/](.aiwg/testing/v2-1-resolution-auth.md).
 
@@ -116,6 +117,8 @@ python -m filigree --data-dir .filigree-data projects
 python -m filigree --data-dir .filigree-data import PROJECT_ID examples/events.jsonl
 python -m filigree --data-dir .filigree-data handoff PROJECT_ID --query "cadrage"
 ```
+
+Codex 0.16x deletes old rollout files and keeps thread history only in `~/.codex/thread_history_1.sqlite`; `filigree import-codex-history [--dry-run]` reads it (read-only, on request) and files proposals under the folder Codex recorded for each thread, with the capture's folder rules. Live capture and the activity journal still read rollouts and the state database only.
 
 Supported inputs: normalized JSON events, JSONL, plain `.txt`/`.md` notes, Claude Code visible conversation records, Codex `response_item` messages, and documented claude-tap raw JSONL/full JSON exports. The fixtures in `examples/` are synthetic. Compact `.ctap.json` bundles and WebSocket-only traces are not supported; unsupported records are not a promise of complete transcript fidelity.
 

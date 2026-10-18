@@ -21,6 +21,12 @@ Date : 17 octobre 2026. Auteur : orchestrateur (Opus). Statut : **retenu pour l'
 | D13 | `auto_create` ne s'applique qu'à l'intérieur des racines autorisées. |
 | D14 | Une sonde en échec rend la source `unsupported` et visible. Aucune lecture approximative. |
 
+## Amendement du 2026-10-18 : D11 et `filigree backfill`
+
+D11 vise l'absence de rattrapage *automatique*. Une commande explicite de l'utilisateur, `filigree backfill`, peut remettre les curseurs au début (claude-tap, transcriptions natives, journal d'activité) pendant que l'agent et la capture sont arrêtés. Elle n'importe rien elle-même : les cycles suivants rejouent l'historique par les mêmes chemins que le direct, donc sans changement des règles de preuve (rattachement seulement par identifiant natif résolu vers un dossier, sinon en attente), de dédoublonnage et d'exclusion. Pendant le rejeu, claude-tap est relu entièrement avant toute transcription native. Les registres de dédoublonnage tap/natif ne sont plus plafonnés, puis ils reviennent à leur taille normale. Un élément que la mémoire contient déjà par l'autre canal n'est pas importé une deuxième fois. Une base claude-tap verrouillée ou corrompue fait refuser la commande. Limites connues :
+- une pause passée n'a pas laissé de trace durable, donc son contenu est relu, sauf les intervalles que la capture connaît encore ;
+- un texte tronqué ou normalisé autrement d'un canal à l'autre peut échapper au dédoublonnage.
+
 ## Contrats
 
 ### Réglages (`<data-dir>/.capture/capture.json`)
