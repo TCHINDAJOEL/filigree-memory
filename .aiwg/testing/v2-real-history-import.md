@@ -176,3 +176,4 @@ None of them is attached by guesswork.
 - `python -m unittest discover -s tests`: 430 tests OK (1 skipped).
 - `node --check filigree/static/app.js`: OK.
 - `npm test`: 30 passed, the new paging test included.
+- CI de la PR #1 (commit `7530151`) : verte sur Windows, Linux et macOS (Python 3.11 et 3.14) et en navigateur. Deux tests de `import-codex-history` ne passaient que sous Windows (préfixe `\?\` ajouté sur tous les systèmes ; marqueur « private » présent dans le dossier temporaire de macOS) : corrigés.
